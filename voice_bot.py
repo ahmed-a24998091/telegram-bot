@@ -115,6 +115,10 @@ def say(chat,text):
 
 
 def handle(msg):
+    conversion_text=msg.get('caption') or msg.get('text','')
+    conversion_file=msg.get('document') or msg.get('reply_to_message',{}).get('document')
+    if conversion_file and conversion_bot.target_of(conversion_text) and re.search(r'حول|حوّل|convert|تحويل',conversion_text,re.I):
+        return conversion_bot.handle(msg)
     text=(msg.get('text') or '').strip()
     if office_flow.kind_of(text or msg.get('caption','')):return ORIGINAL(msg)
     prompt=voice_request(text)
