@@ -30,6 +30,7 @@ def init_reminders():
             due TIMESTAMPTZ NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
             created TIMESTAMPTZ NOT NULL DEFAULT NOW())''')
         c.execute("ALTER TABLE bot_reminders ADD COLUMN IF NOT EXISTS recurrence TEXT")
+        c.execute("CREATE TABLE IF NOT EXISTS bot_price_alerts(id BIGSERIAL PRIMARY KEY,chat_id BIGINT NOT NULL,asset TEXT NOT NULL,direction TEXT NOT NULL,threshold NUMERIC NOT NULL,active BOOLEAN NOT NULL DEFAULT FALSE)")
         c.execute("CREATE TABLE IF NOT EXISTS bot_prayer_alerts(chat_id BIGINT PRIMARY KEY, minutes INTEGER NOT NULL, active BOOLEAN NOT NULL DEFAULT FALSE, generated_day TEXT)")
 
 
@@ -37,6 +38,7 @@ def init_reminders():
 def reminders_loop():
     while True:
         try:
+            check_price_alerts()
             queue_prayer_alerts()
             with STORE.connect() as c:
                 c.execute("DELETE FROM bot_reminders WHERE recurrence='prayer' AND due<NOW()-INTERVAL '2 minutes'")
@@ -61,6 +63,33 @@ def handle(msg):
     if msg['chat'].get('type') != 'private':
         return ORIGINAL(msg)
     try:
+        if text.startswith('/price_alert'):
+            import decimal
+            parts=text.split()
+            if len(parts)==1:
+                bot.send(chat,'تنبيه اختياري مرة واحدة. المصدر دليلَك، يراجع كل ١٥ دقيقة أثناء عمل البوت. الدولار بسعر بيع الأهلي المصري، والذهب٢١ بسعر بيع BTC بدون مصنعية. مثال: /price_alert usd above 55 أو /price_alert gold below 5500. هعرض الإعداد للتأكيد، والإيقاف /price_alert off رقم.');return
+            if len(parts)==2 and parts[1]=='list':
+                with STORE.connect() as c:rows=c.execute("SELECT id,asset,direction,threshold,active FROM bot_price_alerts WHERE chat_id=%s ORDER BY id DESC LIMIT 20",(chat,)).fetchall()
+                bot.send(chat,'\n'.join(' | '.join(map(str,r))for r in rows)or'مفيش تنبيهات أسعار.');return
+            if len(parts)==3 and parts[1]=='off' and parts[2].isdigit():
+                with STORE.connect() as c:c.execute("DELETE FROM bot_price_alerts WHERE chat_id=%s AND id=%s",(chat,int(parts[2])))
+                bot.send(chat,'اتلغى التنبيه لو كان موجود عندك.');return
+            if len(parts)!=4 or parts[1]not in ('usd','gold')or parts[2]not in ('above','below'):
+                bot.send(chat,'اكتب /price_alert usd above 55 أو /price_alert gold below 5500.');return
+            try:value=decimal.Decimal(parts[3])
+            except decimal.InvalidOperation:raise ValueError('اكتب سعر رقمي واضح.')
+            if not value.is_finite()or not 0<value<1000000:raise ValueError('السعر لازم موجب وأقل من مليون.')
+            with STORE.connect() as c:
+                count=c.execute("SELECT count(*) FROM bot_price_alerts WHERE chat_id=%s",(chat,)).fetchone()[0]
+                if count>=10:raise ValueError('الحد١٠تنبيهات. امسح القديم بالأمر /price_alert off رقم.')
+                rid=c.execute("INSERT INTO bot_price_alerts(chat_id,asset,direction,threshold) VALUES (%s,%s,%s,%s) RETURNING id",(chat,parts[1],parts[2],value)).fetchone()[0]
+            asset='الدولار، جنيه لكل دولار بسعر بيع الأهلي المصري'if parts[1]=='usd'else'جرام ذهب٢١بسعر بيع BTC بدون مصنعية'
+            direction='يساوي أو يزيد عن'if parts[2]=='above'else'يساوي أو يقل عن'
+            bot.send(chat,f'التنبيه المقترح رقم{rid}: {asset} {direction} {value} جنيه. مرة واحدة، عند تحقق الشرط حتى لو متحقق بالفعل. بيانات دليلَك استرشادية، المراجعة كل١٥دقيقة أثناء عمل الاستضافة وقد يفوتها عبور سريع. مش توصية بيع أو شراء. للتفعيل /price_confirm {rid} وللإلغاء /price_alert off {rid}');return
+        if text.startswith('/price_confirm '):
+            rid=int(text.split()[1])
+            with STORE.connect() as c:row=c.execute("UPDATE bot_price_alerts SET active=TRUE WHERE chat_id=%s AND id=%s AND active=FALSE RETURNING id",(chat,rid)).fetchone()
+            bot.send(chat,'اتفعّل التنبيه مرة واحدة. المراجعة كل١٥دقيقة أثناء تشغيل البوت وقد تتأخر.'if row else'مفيش تنبيه منتظر تأكيد بالرقم ده.');return
         if text.startswith('/prayer_alerts'):
             parts=text.split()
             if len(parts)==2 and parts[1]=='off':
@@ -212,3 +241,37 @@ def queue_prayer_alerts():
     except Exception:
         PRAYER_RETRY=time.monotonic()+900
         print('prayer_schedule_source_unavailable',flush=True)
+
+
+PRICE_NEXT_CHECK=0
+
+def check_price_alerts():
+    global PRICE_NEXT_CHECK
+    if time.monotonic()<PRICE_NEXT_CHECK:return
+    PRICE_NEXT_CHECK=time.monotonic()+900
+    with STORE.connect() as c:rows=c.execute("SELECT id,chat_id,asset,direction,threshold FROM bot_price_alerts WHERE active=TRUE ORDER BY id LIMIT 200").fetchall()
+    if not rows:return
+    try:
+        import requests,decimal
+        r=requests.get('https://getdaleelak.com/api/v1/feed.json?asset=us-dollar,gold-21k',timeout=12);r.raise_for_status();data=r.json();prices={};now=dt.datetime.now(TZ)
+        for a in data.get('assets',[]):
+            asset='usd'if a.get('id')=='USD-EGP'else'gold'if a.get('id')=='GOLD21K-EGP'else None
+            if not asset:continue
+            stamp=dt.datetime.fromisoformat(a['observedAt'].replace('Z','+00:00')).astimezone(TZ)
+            if stamp>now or now-stamp>dt.timedelta(hours=24)or a.get('freshness',{}).get('stale')is True:continue
+            seller=next((x for x in a.get('sellers',[])if x.get('seller')==('National Bank of Egypt (NBE)'if asset=='usd'else'BTC')),None)
+            if seller:
+                price=decimal.Decimal(str(seller['sell']))
+                if price.is_finite()and price>0:prices[asset]=(price,stamp)
+        for rid,chat,asset,direction,threshold in rows:
+            if asset not in prices:continue
+            price,stamp=prices[asset]
+            if not(price>=threshold if direction=='above'else price<=threshold):continue
+            with STORE.connect() as c:
+                # Serialize cancellation and delivery, and never send after cancellation wins the lock.
+                current=c.execute("SELECT id FROM bot_price_alerts WHERE id=%s AND chat_id=%s AND active=TRUE FOR UPDATE",(rid,chat)).fetchone()
+                if not current:continue
+                label='الدولار بسعر بيع الأهلي المصري'if asset=='usd'else'ذهب٢١بسعر بيع BTC بدون مصنعية'
+                result=bot.tg('sendMessage',data={'chat_id':chat,'text':f'تنبيه السعر رقم{rid}: {label} وصل {price} جنيه. وقت المصدر {stamp:%Y-%m-%d %H:%M} القاهرة. سعر استرشادي، مش عرض مضمون ولا توصية تعامل. المصدر https://getdaleelak.com/en/api'})
+                if result.get('ok'):c.execute("DELETE FROM bot_price_alerts WHERE id=%s",(rid,))
+    except Exception:print('price_alert_source_failed',flush=True)
