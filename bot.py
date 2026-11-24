@@ -243,7 +243,7 @@ def handle_ocr(chat_id, msg):
     if item.get("file_size", 0) > 8 * 1024 * 1024:
         send(chat_id, "حجم الصورة كبير. ابعت صورة أقل من ٨ ميجابايت.")
         return
-    send(chat_id, "بقرأ النص من الصورة. الدقة مش مضمونة ١٠٠٪، خصوصًا الخط اليدوي أو الصورة المش واضحة.")
+    send(chat_id, "جاري التحويل")
     try:
         result = tg("getFile", data={"file_id": item["file_id"]})
         if not result.get("ok"):
