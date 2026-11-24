@@ -1059,6 +1059,110 @@ MENU_TASKS['doi_help']='ابعت /doi ثم المعرف للتحقق من بيا
 
 MENU_SECTIONS['academic'][1].append(('تقرير مراجعة النص والمراجع','task:reviewnew'))
 
+
+FEASIBILITY_STATE={}
+FEASIBILITY_FIELDS=['اسم المشروع','العملة','سعر الوحدة','تكلفة الوحدة المتغيرة','وحدات المبيعات الشهرية','التكلفة الثابتة الشهرية','الاستثمار الأولي']
+def feasibility_parse(text):
+ from decimal import Decimal,InvalidOperation
+ values={}
+ for line in text.splitlines():
+  if ':'not in line:continue
+  k,v=line.split(':',1);k=k.strip();v=v.strip()
+  if k in values:raise ValueError('الحقل مكرر: '+k)
+  values[k]=v
+ if set(values)!=set(FEASIBILITY_FIELDS):raise ValueError('ابعت الحقول السبعة كما هي. لا أملأ أرقاماً من عندي.')
+ if not(1<=len(values['اسم المشروع'])<=100 and 1<=len(values['العملة'])<=25):raise ValueError('اسم المشروع أو العملة غير مناسب.')
+ for k in FEASIBILITY_FIELDS[2:]:
+  try:n=Decimal(values[k].translate(str.maketrans('٠١٢٣٤٥٦٧٨٩٫','0123456789.')))
+  except InvalidOperation:raise ValueError('قيمة رقمية غير صالحة: '+k)
+  if not n.is_finite()or n<0 or n>Decimal('1000000000000'):raise ValueError('قيمة خارج الحد: '+k)
+  values[k]=n
+ if values['سعر الوحدة']<=0:raise ValueError('سعر الوحدة لازم أكبر من صفر.')
+ return values
+
+def feasibility_workbook(v):
+ import io,math
+ from openpyxl import Workbook
+ from openpyxl.styles import Font,PatternFill,Alignment,Border,Side
+ from openpyxl.worksheet.datavalidation import DataValidation
+ from openpyxl.workbook.properties import CalcProperties
+ from openpyxl.chart import BarChart,Reference
+ w=Workbook();i=w.active;i.title='المدخلات';r=w.create_sheet('النتائج');s=w.create_sheet('الحساسية');n=w.create_sheet('الحدود والمصادر');w.calculation=CalcProperties(calcId=191029,fullCalcOnLoad=True)
+ i.append(['المدخل','القيمة','المصدر']);
+ for k in FEASIBILITY_FIELDS:i.append([k,("'"+str(v[k])if str(v[k]).startswith(('=','+','-','@'))else str(v[k]))if k in FEASIBILITY_FIELDS[:2]else float(v[k]),'أرقام أدخلها المستخدم، غير متحققة سوقياً'])
+ dv=DataValidation(type='decimal',operator='between',formula1=0,formula2=1000000000000);dv.errorTitle='رقم غير صالح';dv.error='أدخل رقماً غير سالب.';dv.showErrorMessage=True;dv.errorStyle='stop';i.add_data_validation(dv);dv.add('B4:B8')
+ r.append(['المؤشر','القيمة','التفسير']);rows=[
+ ['الإيراد الشهري',"='المدخلات'!B4*'المدخلات'!B6",'سعر الوحدة × الكمية'],
+ ['التكلفة المتغيرة الشهرية',"='المدخلات'!B5*'المدخلات'!B6",'تكلفة الوحدة × الكمية'],
+ ['هامش المساهمة للوحدة',"='المدخلات'!B4-'المدخلات'!B5",'السعر ناقص التكلفة المتغيرة للوحدة'],
+ ['فائض التشغيل الشهري',"=B2-B3-'المدخلات'!B7",'قبل الضريبة والتمويل والإهلاك وراتب المالك إن لم يدرج'],
+ ['وحدات التعادل الشهرية',"=IF(B4>0,ROUNDUP('المدخلات'!B7/B4,0),\"غير ممكن\")",'تقريب لأعلى، مزيج منتج واحد'],
+ ['مبيعات التعادل الشهرية',"=IF(ISNUMBER(B6),B6*'المدخلات'!B4,\"غير ممكن\")",'وحدات التعادل × السعر'],
+ ['استرداد بسيط بالأشهر',"=IF(B5>0,'المدخلات'!B8/B5,\"لا استرداد بفائض موجب\")",'لا يراعي التدرج أو القيمة الزمنية للنقود'],
+ ['فائض تشغيل سنوي مبسط','=B5*12','افتراض ثبات 12 شهراً، ليس توقعاً سوقياً']]
+ for x in rows:r.append(x)
+ s.append(['معامل كمية مفترض','الكمية الشهرية','فائض التشغيل','نوع الافتراض'])
+ for row,factor in enumerate([.8,1,1.2],2):
+  s.append([factor,"='المدخلات'!B6*A"+str(row),"=B"+str(row)+"*('المدخلات'!B4-'المدخلات'!B5)-'المدخلات'!B7",'اختبار حساسية مفترض، ليس توقع مبيعات'])
+ chart=BarChart();chart.title='حساسية فائض التشغيل للكمية';chart.add_data(Reference(s,min_col=3,min_row=1,max_row=4),titles_from_data=True);chart.set_categories(Reference(s,min_col=1,min_row=2,max_row=4));chart.width=18;chart.height=9;# Scenario table retained without a chart to keep printed sheets compact.
+ for row in [
+ ['القسم','ما يعنيه'],['نوع الملف','نموذج مالي أولي لمنتج أو خدمة واحدة، لا دراسة جدوى سوقية مكتملة'],['مصدر الأرقام','إدخالات المستخدم فقط. لا أسعار أو طلب أو تكاليف سوقية مختلقة'],['التعريف','التكلفة المتغيرة للوحدة والثابتة الشهرية بعملة واحدة. الاستثمار منفصل عن مصروف التشغيل'],['المستبعد','الضرائب والتمويل والإهلاك ورأس المال العامل والموسمية والطاقة الإنتاجية، ما لم يدرجها المستخدم ضمن المدخلات المناسبة'],['الحساسية','كمية 80% و100% و120% افتراض اختباري من النموذج، لا بيانات فعلية'],['التشغيل','الصيغ قابلة للتعديل وتُحسب عند الفتح في Excel أو LibreOffice. لا تعتمد على معاينة Telegram وحدها'],['المطلوب لاستكمال دراسة حقيقية','مصادر أسعار محلية موثقة، طلب المنافسين، التراخيص والضرائب المحلية، الموردون ومواعيد الدفع، قيود الطاقة والمخاطر'],['القرار','ليس توصية استثمار أو ضمان ربح. راجع محاسباً ومتخصص السوق قبل الالتزام']]:n.append(row)
+ for ws in w:
+  ws.sheet_view.rightToLeft=True;ws.freeze_panes='B2';ws.sheet_properties.pageSetUpPr.fitToPage=True;ws.page_setup.orientation='landscape';ws.page_setup.paperSize=ws.PAPERSIZE_A4;ws.page_setup.fitToWidth=1;ws.page_setup.fitToHeight=1;ws.print_options.horizontalCentered=True
+  ws.column_dimensions['A'].width=36;ws.column_dimensions['B'].width=28 if ws!=n else 95;ws.column_dimensions['C'].width=61;ws.column_dimensions['D'].width=52
+  for cell in ws[1]:cell.fill=PatternFill('solid',fgColor='73A89A');cell.font=Font(name='Arial',bold=True,color='251F21',size=12)
+  for row in ws.iter_rows(min_row=2):
+   ws.row_dimensions[row[0].row].height=47 if ws!=s else 40
+   for c in row:c.font=Font(name='Arial',size=11,color='251F21');c.alignment=Alignment(horizontal='right',vertical='center',wrap_text=True)
+  for c in ws[1]:c.alignment=Alignment(horizontal='right',vertical='center',wrap_text=True)
+  ws.row_dimensions[1].height=30
+ for row in range(4,9):i.cell(row,2).number_format='#,##0.00';i.cell(row,2).fill=PatternFill('solid',fgColor='F4EFEC')
+ for row in range(2,10):r.cell(row,2).number_format='#,##0.00'
+ for row in range(2,5):s.cell(row,1).number_format='0%';s.cell(row,3).number_format='#,##0.00'
+ out=io.BytesIO();w.save(out);out.seek(0);return out
+
+def feasibility_request(msg):
+ chat=msg['chat']['id'];text=(msg.get('text')or'').strip()
+ if text in('/forget','/reset'):FEASIBILITY_STATE.pop(chat,None);return False
+ if text in('/feasibilitynew','/menu_task feasibilitynew'):
+  FEASIBILITY_STATE[chat]=time.monotonic();bot.send(chat,'نموذج مالي أولي بأرقامك، مش دراسة سوق مختلقة. ابعت السبع سطور التالية مع قيمة لكل حقل بعد النقطتين. الأرقام بعملة واحدة، الكمية شهرية، ومشروع منتج واحد. صفر مسموح للتكلفة، وليس افتراضاً مني.\n\n'+'\n'.join(k+':'for k in FEASIBILITY_FIELDS)+'\n\n/cancel للإلغاء.');return True
+ if text=='/cancel'and chat in FEASIBILITY_STATE:FEASIBILITY_STATE.pop(chat,None);bot.send(chat,'اتلغى إدخال النموذج المالي.');return True
+ if chat not in FEASIBILITY_STATE or text.startswith('/'):return False
+ if time.monotonic()-FEASIBILITY_STATE[chat]>3600:FEASIBILITY_STATE.pop(chat,None);bot.send(chat,'انتهت جلسة الإدخال. ابعت /feasibilitynew.');return True
+ try:
+  v=feasibility_parse(text);out=feasibility_workbook(v);price=v['سعر الوحدة'];cost=v['تكلفة الوحدة المتغيرة'];quantity=v['وحدات المبيعات الشهرية'];fixed=v['التكلفة الثابتة الشهرية'];income=price*quantity;profit=(price-cost)*quantity-fixed
+  response=bot.tg('sendDocument',data={'chat_id':chat,'caption':'نموذج أولي: '+v['اسم المشروع'][:80]+'\nالإيراد الشهري: '+str(income)+' '+v['العملة']+'\nفائض التشغيل قبل البنود المستبعدة: '+str(profit)+' '+v['العملة']+'\nكل الأرقام من إدخالك، لا تحقق سوقي. الصيغ تحسب عند فتح Excel/LibreOffice.'},files={'document':('feasibility.xlsx',out,'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')})
+  if not response.get('ok'):raise ValueError('تعذر تسليم الملف. جرّب تاني.')
+  feasibility_report(chat,v)
+  FEASIBILITY_STATE.pop(chat,None)
+ except ValueError as e:bot.send(chat,str(e))
+ except Exception:bot.send(chat,'مقدرتش أجهز النموذج. الإدخال لسه منتظر. جرّب تاني.')
+ return True
+FEASIBILITY_ORIGINAL=bot.handle
+def feasibility_handle(msg):
+ if msg.get('chat',{}).get('type')=='private'and feasibility_request(msg):return
+ return FEASIBILITY_ORIGINAL(msg)
+bot.handle=feasibility_handle
+MENU_SECTIONS['feasibility']=('دراسة الجدوى: نموذج مالي أولي بأرقامك وصيغ Excel وحساسية كمية. لا نجمع أسعاراً أو طلباً سوقياً تلقائياً ولا ندعي دراسة مكتملة.', [('إنشاء النموذج المالي','task:feasibilitynew'),('متطلبات دراسة حقيقية','task:feasibility_help')])
+MENU_TASKS['feasibilitynew']='ابعت /feasibilitynew لبدء نموذج مالي بأرقامك.'
+MENU_TASKS['feasibility_help']='استكمال دراسة حقيقية يحتاج المكان والنشاط، عروض أسعار موثقة، الطلب والمنافسين، الموردين، التراخيص والضرائب، طاقة التشغيل ورأس المال العامل. المتاح الآن نموذج أولي بإدخالاتك، ليس توصية استثمار.'
+
+
+def feasibility_report(chat,v):
+ from decimal import Decimal,ROUND_CEILING
+ price=v['سعر الوحدة'];cost=v['تكلفة الوحدة المتغيرة'];qty=v['وحدات المبيعات الشهرية'];fixed=v['التكلفة الثابتة الشهرية'];initial=v['الاستثمار الأولي'];margin=price-cost;profit=margin*qty-fixed
+ unit=v['العملة'];fmt=lambda n:format(n.quantize(Decimal('.01')),',.2f')
+ breakunits=(fixed/margin).to_integral_value(rounding=ROUND_CEILING)if margin>0 else None
+ sections=[{'heading':'نوع التقرير والمصدر','paragraphs':['هذا نموذج مالي أولي لمنتج أو خدمة واحدة، بأرقام أدخلها المستخدم. ليس دراسة جدوى سوقية مكتملة، ولا توصية استثمار أو ضمان ربح. لا أسعار سوق أو مبيعات متحققة من مصادر خارجية.','اسم المشروع: '+v['اسم المشروع']+'؛ العملة: '+unit]},
+ {'heading':'المدخلات كما أرسلها المستخدم','paragraphs':[k+': '+str(v[k])+(' '+unit if k in('سعر الوحدة','تكلفة الوحدة المتغيرة','التكلفة الثابتة الشهرية','الاستثمار الأولي')else'')for k in FEASIBILITY_FIELDS[2:]]},
+ {'heading':'حسابات شهرية وليست توقعات سوقية','paragraphs':['الإيراد = السعر × الكمية = '+fmt(price*qty)+' '+unit,'التكلفة المتغيرة = تكلفة الوحدة × الكمية = '+fmt(cost*qty)+' '+unit,'هامش مساهمة الوحدة = السعر ناقص التكلفة المتغيرة = '+fmt(margin)+' '+unit,'فائض التشغيل قبل البنود المستبعدة = الهامش × الكمية ناقص الثابت = '+fmt(profit)+' '+unit,'وحدات التعادل بعد التقريب لأعلى: '+str(breakunits)if breakunits is not None else'التعادل غير ممكن بهامش مساهمة غير موجب.','استرداد بسيط = الاستثمار ÷ فائض التشغيل بالأشهر: '+fmt(initial/profit)if profit>0 else'لا يوجد استرداد بسيط بفائض موجب في هذا السيناريو.']},
+ {'heading':'حساسية كمية افتراضية','paragraphs':['معامل '+str(factor)+' من الكمية، فائض التشغيل '+fmt(margin*qty*factor-fixed)+' '+unit for factor in [Decimal('.8'),Decimal('1'),Decimal('1.2')]]},
+ {'heading':'بنود غير مشمولة وقرارات لازمة','paragraphs':['الحساب يفترض ثبات السعر والتكلفة والكمية، ولا يختبر الطلب أو المنافسة أو الطاقة الإنتاجية. الحساسية افتراض اختباري، لا توقع مبيعات.','لا يشمل ضريبة أو فوائد أو إهلاكاً أو رأس مال عاملاً أو موسمية. راتب المالك وأي مصروف غير مدرج لن يظهر. لا تكرر احتساب الاستثمار كمصروف تشغيل.','لا يفحص ترخيص النشاط أو اشتراطات الدولة والمدينة أو عقد الإيجار. يلزم مصدر محلي حديث لكل تكلفة وسعر وطلب قبل أي التزام.','للاستكمال: عروض موردين مؤرخة، شروط دفع وتحصيل، الطلب والمنافسون، التراخيص والضرائب، حدود التشغيل والمخاطر. راجع محاسباً ومتخصص سوق.']},
+ {'heading':'ملف الحسابات','paragraphs':['ملف Excel المرفق يحتوي المدخلات والمعادلات والنتائج والحساسية والحدود. المعادلات تحسب عند الفتح في Excel أو LibreOffice، وقد لا تظهر الأرقام في معاينة Telegram. هذه النسخة النصية تستخدم نفس المدخلات وقت الإنشاء وليست مرتبطة بتعديلات Excel اللاحقة.']}]
+ out=office_flow.word({'title':'نموذج مالي أولي: '+v['اسم المشروع'],'sections':sections})
+ r=bot.tg('sendDocument',data={'chat_id':chat,'caption':'تقرير المدخلات والحسابات والحدود، لا دراسة سوق مكتملة.'},files={'document':('feasibility-report.docx',out,'application/vnd.openxmlformats-officedocument.wordprocessingml.document')})
+ if not r.get('ok'):raise ValueError('اترسل Excel لكن تعذر تسليم تقرير Word. الأرقام لسه في الإدخال، جرّب تاني.')
+
 if __name__=='__main__':
     initialize_menu()
     conversion_bot.finish_bot.EXTRA.init_reminders()
