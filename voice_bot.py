@@ -1378,7 +1378,7 @@ def proof_report(state):
  if state['rejected']:out.append('استبعدت '+str(state['rejected'])+'مقترحاً لم يجتز شروط المقطع أو الأرقام أو الروابط. لم أطبقه.')
  out.extend(['النص الأصلي بدون تغيير',state['text']]);return '\n\n'.join(out)
 def proof_export(chat,state,kind):
- text=proof_report(state)
+ preview_state=dict(state);preview_state['text']='';text=proof_report(preview_state)
  from docx import Document
  from docx.shared import Pt,Inches,RGBColor
  d=Document();sec=d.sections[0];sec.top_margin=sec.bottom_margin=Inches(.7);d.styles['Normal'].font.name='Arial';d.styles['Normal'].font.size=Pt(12);d.styles['Normal'].paragraph_format.space_after=Pt(6)
@@ -1390,6 +1390,7 @@ def proof_export(chat,state,kind):
    p=d.add_paragraph(line[start:start+1400])
    if re.match(r'\d+\. قبل:|بعد مقترح:',line):p.paragraph_format.keep_with_next=True
    if re.search('[\u0600-\u06ff]',line):office_flow.rtl(p)
+ p=d.add_paragraph(state['text']);office_flow.rtl(p)
  out=io.BytesIO();d.save(out);out.seek(0);name='proofreading-proposals.docx';mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
  if kind=='pdf':
   r=requests.post(os.environ['CONVERTER_URL'].rstrip('/')+'/convert',data=out.getvalue(),headers={'Authorization':'Bearer '+os.environ['CONVERTER_KEY'],'X-Format':'docx','X-Target':'pdf'},timeout=95);r.raise_for_status()
@@ -1420,7 +1421,7 @@ def proof_handle(msg):
   if not PROOF_LOCK.acquire(False):bot.send(chat,'فيه مراجعة لغوية شغالة. جرب بعد دقيقة.');return
   try:
    if msg.get('document')or msg.get('photo'):raise ValueError('هذه الجلسة نص فقط. ابعت النص منسوخاً.')
-   edits,rejected=proof_proposals(text);state={'text':text,'source':'نص مرسل من المستخدم','edits':edits,'rejected':rejected,'time':time.monotonic()};PROOF_STATE[chat]=state
+   original=msg.get('text')or'';edits,rejected=proof_proposals(original);state={'text':original,'source':'نص مرسل من المستخدم','edits':edits,'rejected':rejected,'time':time.monotonic()};PROOF_STATE[chat]=state
    if len(PROOF_STATE)>100:PROOF_STATE.pop(min(PROOF_STATE,key=lambda k:PROOF_STATE[k]['time']),None)
    preview=proof_report(state);bot.send(chat,(preview if len(preview)<=3200 else preview[:3000]+'\n[عرض مختصر، التصدير يحتوي الأصل والمقترحات كاملة]')+'\n\n/proofexport word أو /proofexport pdf')
   except ValueError as e:bot.send(chat,str(e))
