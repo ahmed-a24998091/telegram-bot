@@ -28,6 +28,44 @@ def fast_chat(msgs):
 bot.ask_gemini=fast_chat
 
 
+def exact_calculate(expr):
+    import ast
+    from fractions import Fraction
+    expr=expr.translate(str.maketrans('٠١٢٣٤٥٦٧٨٩٫×÷−','0123456789.* /-'.replace(' ',''))).replace('^','**').strip()
+    if not expr or len(expr)>180:raise ValueError('اكتب عملية حسابية واضحة، مثلاً احسب 12.5 * 4')
+    def visit(n):
+        if isinstance(n,ast.Constant) and type(n.value) in (int,float):
+            raw=ast.get_source_segment(expr,n)
+            if not re.fullmatch(r'\d+(?:\.\d+)?',raw or ''):raise ValueError('استخدم أرقام عشرية عادية.')
+            value=Fraction(raw)
+        elif isinstance(n,ast.UnaryOp) and isinstance(n.op,(ast.USub,ast.UAdd)):
+            value=visit(n.operand)*(-1 if isinstance(n.op,ast.USub) else 1)
+        elif isinstance(n,ast.BinOp):
+            a,b=visit(n.left),visit(n.right)
+            if isinstance(n.op,ast.Add):value=a+b
+            elif isinstance(n.op,ast.Sub):value=a-b
+            elif isinstance(n.op,ast.Mult):value=a*b
+            elif isinstance(n.op,ast.Div):value=a/b
+            elif isinstance(n.op,ast.Mod):value=a%b
+            elif isinstance(n.op,ast.Pow) and b.denominator==1 and abs(b)<=10:value=a**int(b)
+            else:raise ValueError('العملية دي مش مدعومة. استخدم + - * / ** % وأقواس.')
+        else:raise ValueError('اكتب العملية بالأرقام والعلامات، مثلاً احسب (12+3)*4')
+        if abs(value)>10**30 or value.denominator>10**30:raise ValueError('النتيجة أكبر من الحد الآمن للحاسبة.')
+        return value
+    try:value=visit(ast.parse(expr,mode='eval').body)
+    except ZeroDivisionError:raise ValueError('القسمة على صفر غير معرفة.')
+    except (SyntaxError,TypeError):raise ValueError('اكتب عملية صحيحة، مثلاً احسب 12 + 3')
+    d=value.denominator
+    for p in (2,5):
+        while d%p==0:d//=p
+    if d!=1:return str(value.numerator)+'/'+str(value.denominator)+' (كسر دقيق، تمثيله العشري دوري)'
+    from decimal import Decimal,localcontext
+    with localcontext() as c:
+        c.prec=100
+        out=format(Decimal(value.numerator)/Decimal(value.denominator),'f')
+    return out.rstrip('0').rstrip('.') if '.' in out else out
+
+
 def price_request(text):
     norm=re.sub(r'[ًٌٍَُِّْـ]','',text)
     asset=bool(re.search(r'ذهب|دهب|دولار|gold|dollar|usd',norm,re.I))
@@ -122,6 +160,11 @@ def adhkar(evening=False):
 
 def handle(msg):
     text=(msg.get('text') or '').strip();chat=msg['chat']['id']
+    calc=re.match(r'^(?:/calc|احسب(?:لي|لى)?|إحسب(?:لي|لى)?|احسبي|calculate)\s*(.*)$',text,re.I)
+    if calc:
+        try:bot.send(chat,'الناتج الدقيق: '+exact_calculate(calc.group(1)))
+        except ValueError as e:bot.send(chat,str(e))
+        return
     if msg['chat'].get('type')=='private' and price_request(text):
         started=time.monotonic()
         try:bot.send(chat,prices())
