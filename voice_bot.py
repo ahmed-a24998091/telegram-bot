@@ -117,6 +117,7 @@ def say(chat,text):
 def handle(msg):
     photo_text=msg.get('caption') or msg.get('text','')
     media=msg if (msg.get('photo')or msg.get('document',{}).get('mime_type','').startswith('image/'))else msg.get('reply_to_message',{})
+    if conversion_bot.target_of(photo_text)=='docx'and(media.get('photo')or media.get('document',{}).get('mime_type','').startswith('image/')):return conversion_bot.convert_scan(msg,media)
     operation=image_operation(photo_text)
     if operation and (media.get('photo')or media.get('document',{}).get('mime_type','').startswith('image/'))and msg.get('chat',{}).get('type')=='private':return process_photo(msg,media,operation)
     conversion_text=msg.get('caption') or msg.get('text','')
