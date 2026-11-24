@@ -377,7 +377,96 @@ def source_handle(msg):
   if source_request(msg)or geo_request(msg):return
  return SOURCE_ORIGINAL(msg)
 bot.handle=source_handle
+
+# Telegram command menu is flat. Sections open inline navigation buttons.
+MENU_SECTIONS={
+ 'menu':('القائمة الرئيسية، اختار قسم. الأدوات المتاحة فعلياً فقط؛ الأقسام الجديدة موضح حالتها.', [('الدراسة','study'),('البحث الأكاديمي','academic'),('دراسة الجدوى','feasibility'),('المصادر والبحث','sources'),('الملفات','files'),('الصور والصوت','media'),('الأدوات اليومية','daily'),('الخصوصية والمساعدة','settings')]),
+ 'study':('الدراسة: شرح وتلخيص وأسئلة على نص ترسله. شغل الملفات الدراسية الموجّه بيتجهز في المرحلة التالية، ومش هنقول إننا قرأنا ملف لم يُقرأ.', [('شرح نص','task:explain'),('تلخيص نص','task:summarize'),('أسئلة من نص','task:quiz'),('إعداد Word من نص','task:word'),('إعداد PowerPoint من نص','task:pptx')]),
+ 'academic':('البحث الأكاديمي من البكالوريوس لما بعد الدكتوراه. المتاح الآن اكتشاف بيانات DOI، وتخطيط بحث ومراجعة نصوص. قراءة الأوراق الكاملة وجدول أدبيات موثق قيد التجهيز. لا مراجع أو بيانات تجارب مخترعة.', [('اكتشاف مراجع DOI','task:papers'),('سؤال وخطة بحث','task:outline'),('مراجعة لغوية','task:review')]),
+ 'feasibility':('دراسة الجدوى: دفتر الأرقام والمعادلات قيد التجهيز، لم يتم إطلاقه بعد. المتاح الآن تجهيز قائمة البيانات المطلوبة، بدون أرقام سوق أو أرباح مخمّنة.', [('قائمة البيانات المطلوبة','task:feasibility_inputs')]),
+ 'sources':('مصادر مجانية محدودة، مش Google أو بحث ويب شامل. البحث التفصيلي الحالي استعلامات متعددة في ويكيبيديا وبيانات Crossref، مش قراءة أوراق كاملة.', [('بحث ويكيبيديا','task:wiki'),('اكتشاف متعدد الاستعلامات','task:research'),('مراجع DOI','task:papers'),('بحث صور مرخّصة','task:imagesearch'),('أخبار بمصادرها','task:news')]),
+ 'files':('ابعت الملف ومعاه طلبك أو رد عليه بالطلب. النتيجة تختلف حسب نوع الملف وجودته؛ صورة داخل Word ليست مستنداً كاملاً قابلًا للتحرير.', [('تحويل ملف','task:convert'),('استخراج جداول إلى Excel','task:tables'),('صورة إلى Word','task:scan'),('إعداد Word من نص','task:word'),('إعداد PowerPoint من نص','task:pptx')]),
+ 'media':('صور وصوت بالخدمات المجانية المتاحة، ممكن تتوقف عند حدود الاستخدام.', [('توليد صورة','task:draw'),('حذف خلفية','task:removebg'),('تكبير صورة2×','task:upscale'),('رد صوتي','task:voice')]),
+ 'daily':('الأوقات حسب المكان، لا تعني كل مناطق البلد. مواقيت الصلاة حسابية قد تختلف عن المسجد، والطقس تقدير المصدر.', [('ساعة العالم','task:clock'),('الطقس','task:weather'),('مواقيت الصلاة','task:prayer'),('أسعار العملات','task:currency'),('كرة القدم المدعومة','task:sports'),('تذكير','task:reminder')]),
+ 'settings':('الخصوصية: كل مستخدم له سجل منفصل. البحث يرسل موضوع البحث فقط للمصادر ولا يرسل سجل المحادثة. الخدمات المجانية لها حدود وتوقفات. لا تضع كلمات مرور أو أرقام بطاقات في الرسائل.', [('المصادر والحدود','task:limits'),('أوامر الذاكرة','task:memory')])
+}
+MENU_TASKS={
+ 'wiki':'ابعت /wiki وبعده الموضوع. مثال: /wiki جامعة أسيوط',
+ 'research':'ابعت /research وبعده موضوع محدد. حتى٣استعلامات في ويكيبيديا وCrossref؛ ليس بحثاً شاملاً أو قراءة للأوراق كاملة.',
+ 'papers':'ابعت /papers وبعده كلمات البحث، الأفضل بالإنجليزي. النتيجة بيانات DOI وليست تزكية للمراجع أو تأكيداً لصحة نتائجها.',
+ 'imagesearch':'ابعت /imagesearch وبعده وصف الصورة، الأفضل بالإنجليزي. هنرجع صفحات Commons مع الترخيص وصاحب العمل.',
+ 'news':'ابعت أخبار وبعدها المجال أو البلد. مثال: أخبار التكنولوجيا. العناوين لها مصادر وأوقات، مش قراءة كاملة للمقالات.',
+ 'clock':'ابعت /time وبعده المدينة والبلد. مثال: /time Tokyo, Japan',
+ 'weather':'ابعت /weather وبعده المدينة والبلد. مثال: /weather Tokyo, Japan',
+ 'prayer':'ابعت /prayer وبعده المدينة والبلد. مثال: /prayer Cairo, Egypt. لتغيير طريقة الحساب أضف | method=5. مفيش تنبيهات اتفعلت.',
+ 'currency':'ابعت أسعار العملات. الأسعار بمصدر ووقت تحديث، مش سعر تنفيذ مضمون.',
+ 'sports':'ابعت مباريات اليوم. التغطية للبطولات المدعومة فقط، مش كل بطولات العالم.',
+ 'reminder':'اكتب فكرني وبعدها المهمة والموعد والمنطقة الزمنية. راجع رسالة التأكيد قبل اعتماد التذكير.',
+ 'convert':'ابعت الملف واكتب التحويل المطلوب، مثال: حول إلى PDF أو Word. الملفات المدعومة وحدودها تختلف؛ ابعت نسخة أصلية بدل لقطة شاشة لو متاحة.',
+ 'tables':'ابعت PDF نصي أو Word واكتب حول الجداول Excel. للـExcel اكتب حول الجداول Word. الجداول المصوّرة المعقدة مش استخراج مضمون.',
+ 'scan':'ابعت صورة واضحة أو PDF سكان واكتب حول Word. الملف يحفظ شكل الصفحة كصورة، مش نص وجدول بنفس التخطيط قابلين للتعديل بالكامل. أي نص منسوخ غير متحقق للمراجعة، والخط تقريبي.',
+ 'draw':'اكتب وصف الصورة المطلوبة مباشرة. مثال: ارسم منظر للنيل وقت الغروب. مفيش ضمان شكل محدد أو خدمة متاحة دائماً.',
+ 'removebg':'ابعت الصورة واكتب شيل الخلفية. حتى٨ميجابيكسل؛ الشعر والأطراف قد تحتاج تنظيف يدوي.',
+ 'upscale':'ابعت الصورة واكتب كبرها2×. حتى٢ميجابيكسل، تحسين حدة بسيط مش استرجاع تفاصيل مفقودة.',
+ 'voice':'ابعت /voice وبعدها السؤال أو النص المطلوب نطقه. عند فشل خدمة الصوت هيرجع نص بصراحة.',
+ 'word':'ابعت النص واكتب اعمله Word. الناتج مبني على النص المرسل، مش ورقة بحثية موثقة تلقائياً.',
+ 'pptx':'ابعت النص واكتب اعمله PowerPoint. لو محتاج عدد شرائح أو مستوى دراسي اكتبه.',
+ 'explain':'ابعت النص واكتب اشرح، وحدد المادة والمستوى الدراسي. الشرح مولد وقد يحتاج مراجعة مدرس، مش مصدر حقيقة مستقل.',
+ 'summarize':'ابعت النص واكتب لخص مع أهم الأفكار. الملخص يكون من النص نفسه، والمعلومة الناقصة مش هنخترعها.',
+ 'quiz':'ابعت النص واكتب اعمل أسئلة منه، وحدد عددها ومستواها ولو عايز إجابات منفصلة.',
+ 'outline':'اكتب مجال الدراسة والمستوى وسؤال البحث والمطلوب. نقدر نرتب خطة أولية، لكن مش هنخترع تجارب أو نتائج أو مراجع.',
+ 'review':'ابعت النص واكتب راجعه لغوياً، مع توضيح هل تحب تتبع تغييرات أو صياغة بديلة.',
+ 'feasibility_inputs':'جهز: البلد والمدينة والعملة وتاريخ الأسعار، وصف المشروع والعملاء والطاقة التشغيلية، عروض أسعار المعدات والإيجار والتراخيص، تكاليف الوحدة والأجور والمصاريف الثابتة، سعر البيع المدعوم وكمية المبيعات المتوقعة ومصدرها، التمويل والضرائب ورأس المال العامل. أي رقم غير موثق يتسمى افتراض. دفتر الجدوى بالمعادلات لسه قيد التجهيز.',
+ 'limits':SEARCH_CAPABILITIES,
+ 'memory':'للذاكرة: /memory_on و/memory_off للتشغيل والإيقاف، و/forget لحذف المحادثة المخزنة. راجع رسالة البوت، الأوامر الفعلية معروضة حسب النسخة. لا نخزن ملفاتك الأصلية كأرشيف مضمون.'
+}
+def menu_send(chat,section):
+ if section not in MENU_SECTIONS:section='menu'
+ title,items=MENU_SECTIONS[section]
+ rows=[[{'text':label,'callback_data':'menu:'+value}]for label,value in items]
+ if section!='menu':rows.append([{'text':'رجوع للرئيسية','callback_data':'menu:menu'}])
+ result=bot.tg('sendMessage',data={'chat_id':chat,'text':title,'reply_markup':json.dumps({'inline_keyboard':rows},ensure_ascii=False)})
+ if not result.get('ok'):bot.send(chat,'تعذر فتح الأزرار. ابعت /menu للمحاولة، أو اكتب طلبك مباشرة.')
+
+def menu_handle(msg):
+ text=(msg.get('text')or'').strip();chat=msg['chat']['id']
+ section=text.lstrip('/')
+ if text.startswith('/')and section in MENU_SECTIONS:menu_send(chat,section);return True
+ if text.startswith('/menu_task '):
+  task=text[11:].strip()
+  if task in MENU_TASKS:bot.send(chat,MENU_TASKS[task]);return True
+ return False
+
+MENU_TG=bot.tg
+def menu_tg(method,**kw):
+ result=MENU_TG(method,**kw)
+ if method=='getUpdates':
+  # Telegram callback is a user's explicit button press. Route only our allowlisted commands.
+  for update in result.get('result',[]):
+   cb=update.get('callback_query',{});value=cb.get('data','');message=cb.get('message',{});actor=cb.get('from',{})
+   if not value.startswith('menu:')or message.get('chat',{}).get('type')!='private'or actor.get('id')!=message.get('chat',{}).get('id'):continue
+   target=value[5:]
+   if target in MENU_SECTIONS:text='/'+target
+   elif target.startswith('task:')and target[5:]in MENU_TASKS:text='/menu_task '+target[5:]
+   else:continue
+   MENU_TG('answerCallbackQuery',data={'callback_query_id':cb['id']})
+   update['message']={'chat':message['chat'],'from':actor,'text':text,'message_id':message['message_id'],'date':message.get('date',0)}
+ return result
+bot.tg=menu_tg
+MENU_ORIGINAL=bot.handle
+def navigation_handle(msg):
+ if msg.get('chat',{}).get('type')=='private'and menu_handle(msg):return
+ return MENU_ORIGINAL(msg)
+bot.handle=navigation_handle
+
+def initialize_menu():
+ commands=[{'command':key,'description':label}for key,label in [('menu','القائمة الرئيسية'),('study','الدراسة والتلخيص والأسئلة'),('academic','البحث الأكاديمي'),('feasibility','دراسة الجدوى، حالة التجهيز'),('sources','مصادر وبحث محدود'),('files','الملفات والتحويل'),('media','الصور والصوت'),('daily','الأدوات اليومية'),('settings','الخصوصية والمساعدة')]]
+ a=bot.tg('setMyCommands',data={'commands':json.dumps(commands,ensure_ascii=False),'scope':json.dumps({'type':'all_private_chats'})})
+ b=bot.tg('setChatMenuButton',data={'menu_button':json.dumps({'type':'commands'})})
+ print('command_menu_ready',bool(a.get('ok')and b.get('ok')),flush=True)
+
 if __name__=='__main__':
+    initialize_menu()
     conversion_bot.finish_bot.EXTRA.init_reminders()
     threading.Thread(target=conversion_bot.finish_bot.EXTRA.reminders_loop,daemon=True).start()
     print('voice_conversion_ready',flush=True)
