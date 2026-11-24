@@ -1,70 +1,70 @@
-import io
-import os
-import re
-import threading
-import zipfile
-import requests
-import bot
-import finish_bot
-
+import io,os,re,threading,zipfile,requests
+import bot,finish_bot
 ORIGINAL=bot.handle
 MAX_BYTES=15*1024*1024
 FORMATS={'doc':('docx','application/vnd.openxmlformats-officedocument.wordprocessingml.document'),'xls':('xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),'ppt':('pptx','application/vnd.openxmlformats-officedocument.presentationml.presentation')}
+MIME={'pdf':'application/pdf','docx':FORMATS['doc'][1],'xlsx':FORMATS['xls'][1],'pptx':FORMATS['ppt'][1],'csv':'text/csv'}
 LOCK=threading.Lock()
-
-
-def convert_document(msg):
-    doc=msg['document'];chat=msg['chat']['id'];name=doc.get('file_name','document.doc');ext=name.rsplit('.',1)[-1].lower()
-    if doc.get('file_size',0)>MAX_BYTES:
-        bot.send(chat,'التحويل للملفات القديمة لحد ١٥ ميجابايت. ابعت نسخة أصغر.');return
-    url=os.environ.get('CONVERTER_URL','').rstrip('/');key=os.environ.get('CONVERTER_KEY','')
-    if not url.startswith('https://') or not key:
-        bot.send(chat,'خدمة التحويل مش جاهزة حالياً. جرّب بعدين.');return
-    if not LOCK.acquire(False):
-        bot.send(chat,'فيه ملف بيتحول دلوقتي. جرّب تاني بعد دقيقة.');return
-    try:
-        bot.send(chat,'جاري التحويل')
-        meta=bot.tg('getFile',data={'file_id':doc['file_id']})
-        if not meta.get('ok'):raise ValueError('download')
-        r=requests.get('https://api.telegram.org/file/bot'+bot.TELEGRAM_TOKEN+'/'+meta['result']['file_path'],stream=True,timeout=40)
-        r.raise_for_status();data=bytearray()
-        for chunk in r.iter_content(65536):
-            data.extend(chunk)
-            if len(data)>MAX_BYTES:raise ValueError('size')
-        if not data.startswith(bytes.fromhex('d0cf11e0a1b11ae1')):raise ValueError('format')
-        # Free service cold starts may take a minute. No document upload in this health request.
-        requests.get(url+'/health',timeout=95).raise_for_status()
-        r=requests.post(url+'/convert',data=data,headers={'Authorization':'Bearer '+key,'X-Format':ext},stream=True,timeout=90)
-        if r.status_code==429:
-            bot.send(chat,'خدمة التحويل مشغولة دلوقتي. جرّب بعد دقيقة.');return
-        r.raise_for_status();output=bytearray()
-        for chunk in r.iter_content(65536):
-            output.extend(chunk)
-            if len(output)>15*1024*1024:raise ValueError('output size')
-        with zipfile.ZipFile(io.BytesIO(output)) as z:
-            if len(z.infolist())>10000 or sum(i.file_size for i in z.infolist())>60*1024*1024:raise ValueError('expanded size')
-            expected={'doc':'word/document.xml','xls':'xl/workbook.xml','ppt':'ppt/presentation.xml'}[ext]
-            if expected not in z.namelist() or any('vbaproject' in n.lower() for n in z.namelist()):raise ValueError('output format')
-        modern,mime=FORMATS[ext];stem=re.sub(r'[^\w\u0600-\u06ff .-]','_',name.rsplit('.',1)[0])[:100] or 'document'
-        result=bot.tg('sendDocument',data={'chat_id':chat},files={'document':(stem+'.'+modern,io.BytesIO(output),mime)})
-        if not result.get('ok'):raise ValueError('delivery')
-        print('legacy_conversion_sent',ext,flush=True)
-    except Exception:
-        print('legacy_conversion_failed',ext,flush=True)
-        bot.send(chat,'مقدرتش أحول الملف ده. ممكن يكون محمي أو تالف أو معقد على الخدمة المجانية. جرّب نسخة مفتوحة وأصغر.');return
-    finally:LOCK.release()
-
-
+def target_of(text):
+ t=(text or '').lower()
+ # Target is normally after the last to/إلى/لـ marker, never the PDF source name.
+ words=list(re.finditer(r'pdf|بي\s*دي\s*اف|docx|word|وورد|ورد|xlsx|excel|اكسل|إكسل|pptx|powerpoint|بوربوينت|بور\s*بوينت|csv',t))
+ if not words:return ''
+ v=words[-1].group();return 'pdf' if re.fullmatch(r'pdf|بي\s*دي\s*اف',v) else 'docx' if v in ('docx','word','وورد','ورد') else 'xlsx' if v in ('xlsx','excel','اكسل','إكسل') else 'csv' if v=='csv' else 'pptx'
+def convert_document(msg,target=''):
+ doc=msg['document'];chat=msg['chat']['id'];name=doc.get('file_name','document');ext=name.rsplit('.',1)[-1].lower();target=target or FORMATS.get(ext,('',))[0]
+ pairs={('doc','docx'),('xls','xlsx'),('ppt','pptx'),('pdf','docx')}|{(s,'pdf') for s in ('doc','docx','xls','xlsx','ppt','pptx')}|{('xls','csv'),('xlsx','csv')}
+ if not target:
+  bot.send(chat,'عايز تحوله لإيه؟ رد على الملف واكتب: حوله PDF أو حوله Word.');return
+ if (ext,target)not in pairs:
+  bot.send(chat,'التحويل المباشر المتاح: Word وExcel وPowerPoint إلى PDF، وPDF نصي إلى Word، والملفات القديمة للصيغ الحديثة، وExcel إلى CSV. التحويل لباقي برامج أوفيس محتاج إعادة ترتيب المحتوى مش نسخة مطابقة.');return
+ limit=10*1024*1024 if ext=='pdf' else MAX_BYTES
+ if doc.get('file_size',0)>limit:
+  bot.send(chat,'الحد PDF لحد ١٠ ميجابايت و٢٠ صفحة، وباقي التحويلات ١٥ ميجابايت. ابعت نسخة أصغر.');return
+ url=os.environ.get('CONVERTER_URL','').rstrip('/');key=os.environ.get('CONVERTER_KEY','')
+ if not url.startswith('https://')or not key:bot.send(chat,'خدمة التحويل مش جاهزة حالياً. جرّب بعدين.');return
+ if not LOCK.acquire(False):bot.send(chat,'فيه ملف بيتحول دلوقتي. جرّب تاني بعد دقيقة.');return
+ try:
+  bot.send(chat,'جاري التحويل');meta=bot.tg('getFile',data={'file_id':doc['file_id']})
+  if not meta.get('ok'):raise ValueError('download')
+  r=requests.get('https://api.telegram.org/file/bot'+bot.TELEGRAM_TOKEN+'/'+meta['result']['file_path'],stream=True,timeout=40);r.raise_for_status();data=bytearray()
+  for chunk in r.iter_content(65536):
+   data.extend(chunk)
+   if len(data)>limit:raise ValueError('size')
+  requests.get(url+'/health',timeout=95).raise_for_status()
+  r=requests.post(url+'/convert',data=data,headers={'Authorization':'Bearer '+key,'X-Format':ext,'X-Target':target},stream=True,timeout=90)
+  if r.status_code==429:bot.send(chat,'خدمة التحويل مشغولة دلوقتي. جرّب بعد دقيقة.');return
+  r.raise_for_status();output=bytearray();mode=r.headers.get('X-Conversion-Mode','')
+  for chunk in r.iter_content(65536):
+   output.extend(chunk)
+   if len(output)>MAX_BYTES:raise ValueError('output size')
+  if target in ('docx','xlsx','pptx'):
+   with zipfile.ZipFile(io.BytesIO(output))as z:
+    expected={'docx':'word/document.xml','xlsx':'xl/workbook.xml','pptx':'ppt/presentation.xml'}[target]
+    if expected not in z.namelist()or len(z.infolist())>10000 or sum(i.file_size for i in z.infolist())>60*1024*1024 or any('vbaproject'in n.lower()for n in z.namelist()):raise ValueError('package')
+  elif target=='pdf'and not output.startswith(b'%PDF-'):raise ValueError('PDF')
+  stem=re.sub(r'[^\w\u0600-\u06ff .-]','_',name.rsplit('.',1)[0])[:100]or'document'
+  caption=''
+  if mode=='styled-text-rebuilt':caption='اتعاد تنسيق النص والعناوين عشان يبقى قابل للتعديل. مش نسخة مطابقة من توزيع PDF، والصور والروابط ممكن ما تنتقلش.'
+  elif ext=='pdf':caption='تحويل قابل للتعديل مع الحفاظ على التنسيق قدر الإمكان. راجع الجداول والخطوط قبل الاعتماد.'
+  elif target=='csv':caption='CSV فيه أول ورقة فقط، من غير تنسيق أو صيغ Excel.'
+  info={'chat_id':chat}
+  if caption:info['caption']=caption
+  result=bot.tg('sendDocument',data=info,files={'document':(stem+'.'+target,io.BytesIO(output),MIME[target])})
+  if not result.get('ok'):raise ValueError('delivery')
+  print('document_conversion_sent',ext,target,mode,flush=True)
+ except Exception:
+  print('document_conversion_failed',ext,target,flush=True);bot.send(chat,'مقدرتش أحول الملف ده. PDF لازم يكون نصي ومش محمي، لحد ٢٠ صفحة و١٠ ميجابايت. الجداول العربية المعقدة أو الصور الممسوحة ضوئياً محتاجة ملف أصلي. وباقي أوفيس لحد ١٥ ميجابايت.')
+ finally:LOCK.release()
 def handle(msg):
-    name=msg.get('document',{}).get('file_name','')
-    if name.rsplit('.',1)[-1].lower() in FORMATS:
-        if msg['chat'].get('type')!='private':return ORIGINAL(msg)
-        return convert_document(msg)
-    return ORIGINAL(msg)
-
+ if msg.get('chat',{}).get('type')!='private':return ORIGINAL(msg)
+ current=msg.get('document');reply=msg.get('reply_to_message',{}).get('document');text=msg.get('caption')or msg.get('text','')
+ document=current or(reply if re.search(r'حول|حوّل|convert|تحويل',text,re.I)else None)
+ if document:
+  ext=document.get('file_name','').rsplit('.',1)[-1].lower();target=target_of(text)
+  if ext in FORMATS or(ext in ('pdf','docx','xlsx','pptx')and(target or re.search(r'حول|convert|تحويل',text,re.I))):
+   return convert_document({**msg,'document':document},target)
+ return ORIGINAL(msg)
 bot.handle=handle
 if __name__=='__main__':
-    finish_bot.EXTRA.init_reminders()
-    threading.Thread(target=finish_bot.EXTRA.reminders_loop,daemon=True).start()
-    print('legacy_conversion_ready',flush=True)
-    bot.main()
+ finish_bot.EXTRA.init_reminders();threading.Thread(target=finish_bot.EXTRA.reminders_loop,daemon=True).start();print('document_conversion_ready',flush=True);bot.main()
