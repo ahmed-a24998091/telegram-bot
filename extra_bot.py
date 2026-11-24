@@ -30,12 +30,16 @@ def init_reminders():
             due TIMESTAMPTZ NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
             created TIMESTAMPTZ NOT NULL DEFAULT NOW())''')
         c.execute("ALTER TABLE bot_reminders ADD COLUMN IF NOT EXISTS recurrence TEXT")
+        c.execute("CREATE TABLE IF NOT EXISTS bot_prayer_alerts(chat_id BIGINT PRIMARY KEY, minutes INTEGER NOT NULL, active BOOLEAN NOT NULL DEFAULT FALSE, generated_day TEXT)")
+
 
 
 def reminders_loop():
     while True:
         try:
+            queue_prayer_alerts()
             with STORE.connect() as c:
+                c.execute("DELETE FROM bot_reminders WHERE recurrence='prayer' AND due<NOW()-INTERVAL '2 minutes'")
                 rows = c.execute("SELECT id,chat_id,body,due,recurrence FROM bot_reminders WHERE status='confirmed' AND due<=NOW() ORDER BY due LIMIT 20 FOR UPDATE SKIP LOCKED").fetchall()
                 for rid, chat, body, due, recurrence in rows:
                     result = bot.tg('sendMessage', data={'chat_id': chat, 'text': 'تذكيرك: ' + body})
@@ -57,7 +61,25 @@ def handle(msg):
     if msg['chat'].get('type') != 'private':
         return ORIGINAL(msg)
     try:
-        if text == '/time' or re.search(r'(?:النهارده|النهاردة|انهارده|اليوم|الساعة|الساعه|تاريخ).*(?:ايه|إيه|كام)|^(?:النهارده|النهاردة|الساعة|الساعه|التاريخ)$', text):
+        if text.startswith('/prayer_alerts'):
+            parts=text.split()
+            if len(parts)==2 and parts[1]=='off':
+                with STORE.connect() as c:
+                    c.execute("DELETE FROM bot_prayer_alerts WHERE chat_id=%s",(chat,))
+                    c.execute("DELETE FROM bot_reminders WHERE chat_id=%s AND recurrence='prayer'",(chat,))
+                bot.send(chat,'وقفت تنبيهات الصلاة ومسحت التنبيهات المنتظرة.');return
+            if len(parts)==2 and parts[1].isdigit() and 1<=int(parts[1])<=60:
+                minutes=int(parts[1])
+                with STORE.connect() as c:
+                    c.execute("INSERT INTO bot_prayer_alerts(chat_id,minutes,active) VALUES (%s,%s,FALSE) ON CONFLICT(chat_id) DO UPDATE SET minutes=EXCLUDED.minutes,active=FALSE,generated_day=NULL",(chat,minutes))
+                    c.execute("DELETE FROM bot_reminders WHERE chat_id=%s AND recurrence='prayer'",(chat,))
+                bot.send(chat,f'اقتراح: تنبيه يومي قبل الصلوات الخمس بـ{minutes} دقيقة، للقاهرة فقط بتوقيت القاهرة. الحساب بطريقة الهيئة المصرية للمساحة من AlAdhan وقد يختلف دقائق عن المسجد. الاستضافة المجانية ممكن تتأخر أو تفوّت تنبيه، مش بديل لمنبه الأذان. للتفعيل ابعت /prayer_confirm وللإلغاء /prayer_alerts off');return
+            bot.send(chat,'تنبيهات الصلاة اختيارية وغير مفعلة تلقائياً. للقاهرة فقط: /prayer_alerts 10 لعرض تنبيه قبل الأذان بعشر دقائق وتأكيده. /prayer_alerts off للإيقاف.');return
+        if text=='/prayer_confirm':
+            with STORE.connect() as c:
+                row=c.execute("UPDATE bot_prayer_alerts SET active=TRUE WHERE chat_id=%s AND active=FALSE RETURNING minutes",(chat,)).fetchone()
+            bot.send(chat,'اتفعّلت تنبيهات القاهرة. ممكن تتأخر على الاستضافة المجانية. للإيقاف /prayer_alerts off' if row else 'مفيش إعداد منتظر تأكيد. ابعت /prayer_alerts 10 الأول.');return
+        if text == '/time'  or re.search(r'(?:النهارده|النهاردة|انهارده|اليوم|الساعة|الساعه|تاريخ).*(?:ايه|إيه|كام)|^(?:النهارده|النهاردة|الساعة|الساعه|التاريخ)$', text):
             now = dt.datetime.now(TZ)
             days = ['الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد']
             bot.send(chat, f'{days[now.weekday()]} {now:%Y-%m-%d}\nالوقت دلوقتي {now:%H:%M:%S} بتوقيت القاهرة (Africa/Cairo).')
@@ -139,7 +161,7 @@ def handle(msg):
             bot.send(chat, result)
             return
         if text in ('/features', '/commands'):
-            bot.send(chat, '/news أخبار عالمية اليوم عند الطلب\n/weather اسم المدينة\n/translate اللغة | النص\nابعت رابط مقال أو يوتيوب لتلخيص المتاح منه\n/remind YYYY-MM-DD HH:MM نص التذكير\n/occasion MM-DD HH:MM مناسبة سنوية\n/reminders لعرض التذكيرات\n/cancel رقم لحذف تذكير\n/memory_on و/memory_off\n/remember معلومة\n/forget لمسح الذاكرة')
+            bot.send(chat, '/news أخبار عالمية اليوم عند الطلب\n/weather اسم المدينة\n/translate اللغة | النص\nابعت رابط مقال أو يوتيوب لتلخيص المتاح منه\n/remind YYYY-MM-DD HH:MM نص التذكير\n/occasion MM-DD HH:MM مناسبة سنوية\n/reminders لعرض التذكيرات\n/cancel رقم لحذف تذكير\n/prayer_alerts 10 اقتراح تنبيهات القاهرة\n/prayer_confirm للتفعيل بعد العرض\n/prayer_alerts off للإيقاف\n/football للماتشات المدعومة\n/memory_on و/memory_off\n/remember معلومة\n/forget لمسح الذاكرة')
             return
     except ValueError as e:
         bot.send(chat, str(e) if str(e) else 'الصيغة مش واضحة. ابعت /commands')
@@ -157,3 +179,36 @@ if __name__ == '__main__':
     threading.Thread(target=reminders_loop, daemon=True).start()
     print('extra_features_ready', flush=True)
     bot.main()
+
+
+PRAYER_RETRY=0
+
+def queue_prayer_alerts():
+    global PRAYER_RETRY
+    if time.monotonic()<PRAYER_RETRY:return
+    now=dt.datetime.now(TZ);day=now.strftime('%Y-%m-%d')
+    with STORE.connect() as c:
+        rows=c.execute("SELECT chat_id,minutes FROM bot_prayer_alerts WHERE active=TRUE AND (generated_day IS NULL OR generated_day<>%s)",(day,)).fetchall()
+    if not rows:return
+    try:
+        import requests
+        url='https://api.aladhan.com/v1/timings/'+now.strftime('%d-%m-%Y')
+        r=requests.get(url,params={'latitude':30.0444,'longitude':31.2357,'method':5,'timezonestring':'Africa/Cairo'},timeout=12);r.raise_for_status();data=r.json()['data']
+        if data['date']['gregorian']['date']!=now.strftime('%d-%m-%Y') or abs(data['meta']['latitude']-30.0444)>.02:raise ValueError('invalid date/location')
+        names={'Fajr':'الفجر','Dhuhr':'الظهر','Asr':'العصر','Maghrib':'المغرب','Isha':'العشاء'}
+        schedule=[(label,dt.datetime.combine(now.date(),dt.time.fromisoformat(data['timings'][key][:5]),TZ)) for key,label in names.items()]
+        with STORE.connect() as c:
+            # Subscription may have been disabled while reading the source. Lock and recheck.
+            for chat,minutes in rows:
+                current=c.execute("SELECT minutes,generated_day FROM bot_prayer_alerts WHERE chat_id=%s AND active=TRUE FOR UPDATE",(chat,)).fetchone()
+                if not current or current[0]!=minutes or current[1]==day:continue
+                for label,prayer in schedule:
+                    due=prayer-dt.timedelta(minutes=minutes)
+                    if due<=dt.datetime.now(TZ):continue
+                    body='باقي '+str(minutes)+' دقيقة على '+label+' في القاهرة، الموعد الحسابي '+prayer.strftime('%H:%M')+'. المصدر AlAdhan، ممكن يختلف عن المسجد المحلي.'
+                    c.execute("INSERT INTO bot_reminders(chat_id,body,due,status,recurrence) VALUES (%s,%s,%s,'confirmed','prayer')",(chat,body,due))
+                c.execute("UPDATE bot_prayer_alerts SET generated_day=%s WHERE chat_id=%s",(day,chat))
+            c.execute("DELETE FROM bot_reminders WHERE recurrence='prayer' AND due<NOW()-INTERVAL '10 minutes'")
+    except Exception:
+        PRAYER_RETRY=time.monotonic()+900
+        print('prayer_schedule_source_unavailable',flush=True)
