@@ -1526,6 +1526,25 @@ def focused_intake_handle(msg):
  return INTAKE_INNER(msg)
 bot.handle=focused_intake_handle
 
+# Clear older module context as well as newer session states on explicit reset.
+FORGET_CACHE_INNER=bot.handle
+def forget_legacy_caches(chat):
+ import intent_bundle
+ office_flow.LAST.pop(chat,None)
+ for state in(intent_bundle.LAST_PHOTO,intent_bundle.CLOCK_CONTEXT,intent_bundle.CLARIFY_COUNT):state.pop(chat,None)
+ bot.history.pop(chat,None);bot.last_image_request.pop(chat,None)
+def forget_cache_handle(msg):
+ text=(msg.get('text')or'').strip();reset=msg.get('chat',{}).get('type')=='private'and text in('/forget','/reset')
+ if not reset:return FORGET_CACHE_INNER(msg)
+ chat=msg['chat']['id'];forget_legacy_caches(chat)
+ try:return FORGET_CACHE_INNER(msg)
+ except Exception:
+  bot.send(chat,'مسحت سياق الجلسة المؤقت على هذه العملية، لكن تعذر تأكيد حذف الذاكرة من قاعدة البيانات. لم أعتبر الحذف الدائم ناجحاً. جرب /forget لاحقاً. رسائل Telegram نفسها لم تمسح.')
+ finally:
+  # The confirmation itself must not revive an old context entry.
+  forget_legacy_caches(chat);LAST_OUTPUT.pop(chat,None)
+bot.handle=forget_cache_handle
+
 if __name__=='__main__':
     initialize_menu()
     conversion_bot.finish_bot.EXTRA.init_reminders()
