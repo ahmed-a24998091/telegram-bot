@@ -12,12 +12,12 @@ GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()      # اختياري
 HF_TOKEN = os.environ.get("HF_TOKEN", "").strip()           # اختياري
 # اسم موديل جيميني. "gemini-flash-latest" بيشاور على أحدث فلاش تلقائيًا
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 
 SYSTEM = ("انت مساعد شخصي ذكي اسمه 'مساعد أحمد'، بتتكلم بالعامية المصرية الطبيعية زي صاحب قريب وفاهم: "
           "دافي وخفيف الدم من غير مبالغة، ومختصر ومباشر. ارد بنفس لغة المستخدم؛ ولو كلمك بالمصري رد بالمصري. "
-          "افتكر اللي اتقال في المحادثة وكمّل عليه ومتسألش نفس السؤال مرتين. لو السؤال مش واضح اسأل سؤال واحد بس. "
+          "افتكر اللي اتقال في المحادثة وكمّل عليه ومتسألش نفس السؤال مرتين. لو الرسالة قصيرة أو مش واضحة (زي 'اه' أو 'اسمها') اربطها بآخر كلام في المحادثة وكمّل عليه، ولو لسه مش واضح اسأل سؤال واحد بس. "
           "لو مش عارف قول بصراحة. لو حد عايز صورة قوله يكتب: ارسم + الوصف. الفيديو مش متاح.")
 API = "https://api.telegram.org/bot%s/" % TELEGRAM_TOKEN
 history = {}          # chat_id -> قايمة رسايل
@@ -47,10 +47,10 @@ def ask_gemini(msgs):
                           "parts": [{"text": m["text"]}]} for m in msgs]}
     last = None
     # لو موديل زحمة (503) أو وصل لحده (429) بنجرب اللي بعده
-    for model in [GEMINI_MODEL, "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-2.5-flash"]:
+    for model in [GEMINI_MODEL, "gemini-flash-lite-latest", "gemini-3.6-flash"]:
         url = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent" % model
         try:
-            r = requests.post(url, json=body, headers={"x-goog-api-key": GEMINI_KEY}, timeout=15)
+            r = requests.post(url, json=body, headers={"x-goog-api-key": GEMINI_KEY}, timeout=12)
         except Exception as e:
             last = e
             print("gemini timeout", model)
@@ -91,12 +91,13 @@ def answer(chat_id, text):
     h.append({"role": "user", "text": text})
     del h[:-12]
     providers = []
-    if GEMINI_KEY: providers.append(ask_gemini)   # الأساسي
-    if GROQ_KEY: providers.append(ask_groq)
+    if GROQ_KEY: providers.append(ask_groq)       # لو فيه مفتاح Groq بيبقى الأساسي (أقوى)
+    if GEMINI_KEY: providers.append(ask_gemini)
     providers.append(ask_pollinations)            # احتياطي من غير مفتاح
     for p in providers:
         try:
             out = p(h)
+            print("reply by", p.__name__, "|", out[:60].replace("\n", " "), flush=True)
             if out:
                 h.append({"role": "model", "text": out})
                 return out
@@ -166,10 +167,14 @@ def make_image(chat_id, text):
 
 
 def wants_image(text):
-    t = text.lower()
-    if any(w in t[:20] for w in ("صورة", "صوره", "صوره")) and len(t) < 120:
+    t = text.lower().strip()
+    if t.startswith("/image") or t.startswith("/صورة"):
         return True
-    return t.startswith("/image") or t.startswith("/صورة") or any(t.startswith(w) for w in IMAGE_WORDS)
+    if len(t) > 200:
+        return False
+    pic = any(w in t for w in ("صورة", "صوره", "صور ", "رسمة", "رسم", "ارسم", "إرسم", "draw", "image", "picture"))
+    verb = any(w in t for w in ("ارسم", "إرسم", "ولد", "اعمل", "اعملي", "هات", "عايز", "عاوز", "نفسي", "ابعت", "طلع", "draw", "generate", "make", "create"))
+    return pic and (verb or t.startswith(("صورة", "صوره", "رسم")))
 
 
 def clean_image_text(text):
