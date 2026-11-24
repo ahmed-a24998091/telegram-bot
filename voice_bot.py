@@ -530,7 +530,7 @@ def study_export(chat,state,kind):
   if kind=='pdf':
    url=os.environ.get('CONVERTER_URL','').rstrip('/');key=os.environ.get('CONVERTER_KEY','')
    r=requests.post(url+'/convert',data=out.getvalue(),headers={'Authorization':'Bearer '+key,'X-Format':'docx','X-Target':'pdf'},timeout=95);r.raise_for_status()
-   if not r.content.startswith(b'%PDF'):raise ValueError('PDF unavailable')
+   if not r.content.startswith(b'%PDF'):raise ValueError('تعذر تجهيز PDF سليم. النتيجة محفوظة، جرب تاني أو اختار Word.')
    out=io.BytesIO(r.content);mime='application/pdf';name='study.pdf'
  else:
   # Native editable text. Split bounded lines, never shrink to unreadable microtext.
@@ -548,7 +548,7 @@ def study_export(chat,state,kind):
   for i in range(0,len(lines),4):slides.append({'title':title+' | '+str(i//4+1),'bullets':lines[i:i+4],'notes':'المصدر: '+source})
   out=make_slides({'slides':slides});mime='application/vnd.openxmlformats-officedocument.presentationml.presentation';name='study.pptx'
  r=bot.tg('sendDocument',data={'chat_id':chat,'caption':'من المصدر: '+source[:120]+'. مادة دراسية للمراجعة، لا تشمل الصور أو مراجع غير مقروءة.'},files={'document':(name,out,mime)})
- if not r.get('ok'):raise ValueError('delivery')
+ if not r.get('ok'):raise ValueError('تعذر تسليم ملف الدراسة. النتيجة محفوظة في الجلسة ساعة، جرب التصدير تاني.')
 
 def study_action(chat,action):
  state=STUDY_STATE.get(chat)
@@ -703,12 +703,14 @@ def pending_media_handle(msg):
  reply=msg.get('reply_to_message',{});reply=reply if reply.get('photo')or reply.get('document')else{}
  if own:
   media={k:msg[k]for k in('photo','document','message_id','date')if k in msg};PENDING_MEDIA[chat]={'media':media,'time':time.monotonic()};state=PENDING_MEDIA[chat]
-  if len(PENDING_MEDIA)>100:PENDING_MEDIA.pop(min(PENDING_MEDIA,key=lambda k:PENDING_MEDIA[k].get('time',0)),None)
+  # Idle contexts expire through housekeeping; never silently evict another chat.
  elif reply:
   media=reply;PENDING_MEDIA[chat]={'media':media,'time':time.monotonic()};state=PENDING_MEDIA[chat]
  else:media=state.get('media')
  if text=='/file_action cancel'or text=='/cancel'and state:PENDING_MEDIA.pop(chat,None);bot.send(chat,'اتلغى الملف المنتظر.');return
- if not media:return MEDIA_ORIGINAL(msg)
+ if not media:
+  if text.startswith('/file_action '):bot.send(chat,'الملف المنتظر انتهت جلسته أو مش موجود. ابعته تاني أو رد على نفس الملف بالطلب.');return
+  return MEDIA_ORIGINAL(msg)
  action=None
  if text.startswith('/file_action '):
   action=text[13:];text=MEDIA_ACTIONS.get(action,'')
@@ -919,7 +921,7 @@ def review_export(chat,state,kind):
  out=office_flow.word({'title':'تقرير مراجعة النص والمراجع','sections':sections});name='text-review.docx';mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
  if kind=='pdf':
   r=requests.post(os.environ['CONVERTER_URL'].rstrip('/')+'/convert',data=out.getvalue(),headers={'Authorization':'Bearer '+os.environ['CONVERTER_KEY'],'X-Format':'docx','X-Target':'pdf'},timeout=95);r.raise_for_status()
-  if not r.content.startswith(b'%PDF'):raise ValueError('PDF unavailable')
+  if not r.content.startswith(b'%PDF'):raise ValueError('تعذر تجهيز PDF سليم. النتيجة محفوظة، جرب تاني أو اختار Word.')
   out=io.BytesIO(r.content);name='text-review.pdf';mime='application/pdf'
  r=bot.tg('sendDocument',data={'chat_id':chat,'caption':'تقرير مراجعة محدود، لا يكشف هوية الكاتب ولا يثبت استخدام AI أو الانتحال. اقرأ الحدود داخل الملف.'},files={'document':(name,out,mime)})
  if not r.get('ok'):raise ValueError('send')
@@ -1263,7 +1265,7 @@ def source_dossier_handle(msg):
    out=io.BytesIO();d.save(out);out.seek(0);name='source-dossier.docx';mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
    if kind=='pdf':
     r=requests.post(os.environ['CONVERTER_URL'].rstrip('/')+'/convert',data=out.getvalue(),headers={'Authorization':'Bearer '+os.environ['CONVERTER_KEY'],'X-Format':'docx','X-Target':'pdf'},timeout=95);r.raise_for_status();
-    if not r.content.startswith(b'%PDF'):raise ValueError('PDF unavailable')
+    if not r.content.startswith(b'%PDF'):raise ValueError('تعذر تجهيز PDF سليم. النتيجة محفوظة، جرب تاني أو اختار Word.')
     out=io.BytesIO(r.content);name='source-dossier.pdf';mime='application/pdf'
    result=bot.tg('sendDocument',data={'chat_id':chat,'caption':'سجل مقتطفات ومراجع بوقت الجلب، ليس إجابة محققة أو مراجعة أدبيات شاملة.'},files={'document':(name,out,mime)})
    if not result.get('ok'):raise ValueError('send')
