@@ -1432,6 +1432,82 @@ bot.handle=proof_handle
 MENU_SECTIONS['academic'][1].append(('مراجعة لغوية بمقترحات منفصلة','task:proofnew'))
 MENU_TASKS['proofnew']='ابدأ /proofnew ثم نص عربي حتى4000حرف. الأصل محفوظ كما هو ومقترحات قبل/بعد منفصلة، لا تعديل تلقائي ولا تدقيق حقائق.'
 
+# Aggregate process-local health signals. No message text, IDs, tokens or URLs.
+from collections import deque
+HEALTH_LOCK=threading.Lock()
+HEALTH={'started':time.monotonic(),'poll_ok':0,'scheduler_ok':0,'poll_failures':0,'scheduler_failures':0,'delivery_failures':0,'handler_failures':0}
+HEALTH_EVENTS=deque(maxlen=40)
+def health_mark(kind,ok=True):
+ now=time.monotonic()
+ with HEALTH_LOCK:
+  if kind in('poll','scheduler')and ok:HEALTH[kind+'_ok']=now
+  elif not ok:
+   key=kind+'_failures';HEALTH[key]=HEALTH.get(key,0)+1;HEALTH_EVENTS.append({'kind':kind,'elapsed_s':int(now-HEALTH['started'])})
+ if not ok:print('functional_health_failure',kind,flush=True)
+def health_snapshot():
+ now=time.monotonic()
+ with HEALTH_LOCK:
+  data=dict(HEALTH);events=list(HEALTH_EVENTS)
+ ages={k:(None if not data[k+'_ok']else int(now-data[k+'_ok']))for k in('poll','scheduler')}
+ ready=ages['poll']is not None and ages['poll']<150 and ages['scheduler']is not None and ages['scheduler']<180
+ return {'ready':ready,'uptime_s':int(now-data['started']),'poll_age_s':ages['poll'],'scheduler_age_s':ages['scheduler'],'failures':{k:v for k,v in data.items()if k.endswith('_failures')},'recent_failures':events}
+HEALTH_TG=bot.tg
+def health_tg(method,**kw):
+ try:
+  r=HEALTH_TG(method,**kw)
+  if not isinstance(r,dict):raise ValueError('invalid Telegram response')
+ except Exception:
+  if method=='getUpdates':health_mark('poll',False)
+  elif method.startswith('send'):health_mark('delivery',False)
+  raise
+ if method=='getUpdates':
+  health_mark('poll',bool(r.get('ok')))
+  if not r.get('ok'):
+   try:delay=float(r.get('parameters',{}).get('retry_after',5))
+   except (ValueError,TypeError,AttributeError):delay=5
+   time.sleep(min(60,max(5,delay)))
+ elif method.startswith('send')and not r.get('ok'):health_mark('delivery',False)
+ return r
+bot.tg=health_tg
+HEALTH_HANDLE=bot.handle
+def health_handle(msg):
+ try:
+  if msg['chat'].get('type')=='private'and(msg.get('text')or'').strip()=='/status':
+   s=health_snapshot();bot.send(msg['chat']['id'],'حالة العملية الحالية فقط، ليست ضمان تشغيل مستمر:\n'+('الاستقبال والمجدول استجابا مؤخراً.'if s['ready']else'يوجد فحص لم ينجح بعد أو إشارة متأخرة.')+'\nآخر استقبال ناجح بالثواني: '+str(s['poll_age_s'])+'\nآخر دورة مجدول ناجحة بالثواني: '+str(s['scheduler_age_s'])+'\nعداد أخطاء العملية: '+json.dumps(s['failures'],ensure_ascii=False)+'\nهذه مؤشرات محلية تمسح عند إعادة التشغيل، ولا تختبر جودة الإجابات أو كل المصادر.');return
+  return HEALTH_HANDLE(msg)
+ except Exception:health_mark('handler',False);raise
+bot.handle=health_handle
+HEALTH_PING=bot.Ping
+class FunctionalPing(HEALTH_PING):
+ def do_GET(self):
+  if self.path.split('?')[0]!='/healthz':return super().do_GET()
+  ready=health_snapshot()['ready'];body=json.dumps({'ready':ready}).encode();self.send_response(200 if ready else 503);self.send_header('Content-Type','application/json');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(body)
+ def do_HEAD(self):
+  if self.path.split('?')[0]!='/healthz':return super().do_HEAD()
+  self.send_response(200 if health_snapshot()['ready']else 503);self.end_headers()
+bot.Ping=FunctionalPing
+
+def functional_reminders_loop():
+ extra=conversion_bot.finish_bot.EXTRA
+ while True:
+  try:
+   extra.check_price_alerts();extra.queue_prayer_alerts()
+   with extra.STORE.connect()as c:
+    c.execute("DELETE FROM bot_reminders WHERE recurrence='prayer' AND due<NOW()-INTERVAL '2 minutes'")
+    rows=c.execute("SELECT id,chat_id,body,due,recurrence FROM bot_reminders WHERE status='confirmed' AND due<=NOW() ORDER BY due LIMIT 20 FOR UPDATE SKIP LOCKED").fetchall()
+    for rid,chat,body,due,recurrence in rows:
+     result=bot.tg('sendMessage',data={'chat_id':chat,'text':'تذكيرك: '+body})
+     if result.get('ok'):
+      if recurrence=='yearly':
+       next_due=extra.next_occasion(due.astimezone(extra.TZ),extra.dt.datetime.now(extra.TZ));c.execute('UPDATE bot_reminders SET due=%s WHERE id=%s',(next_due,rid))
+      else:c.execute("UPDATE bot_reminders SET status='sent' WHERE id=%s",(rid,))
+   health_mark('scheduler')
+  except Exception:health_mark('scheduler',False)
+  time.sleep(30)
+conversion_bot.finish_bot.EXTRA.reminders_loop=functional_reminders_loop
+MENU_SECTIONS['settings'][1].append(('حالة الاستقبال والمجدول','task:status'))
+MENU_TASKS['status']='مؤشرات الاستقبال والمجدول للعملية الحالية: /status. ليست اختباراً لكل الخدمات أو ضماناً للاستمرار.'
+
 if __name__=='__main__':
     initialize_menu()
     conversion_bot.finish_bot.EXTRA.init_reminders()
