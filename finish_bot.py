@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from email.utils import parsedate_to_datetime
 import requests
+import urllib.parse
 import bot
 import intent_bundle
 
@@ -15,6 +16,38 @@ DAILY=intent_bundle.office_bot.generate_bot.daily_bot
 TZ=EXTRA.TZ
 CACHE={}
 BASE_SEND=bot.send
+OLD_GEMINI=bot.ask_gemini
+
+def fast_chat(msgs):
+    # Preserve all existing context and fallbacks, but avoid slow first-provider retries.
+    if bot.GROQ_KEY:
+        try:return bot.ask_groq(msgs)
+        except Exception:pass
+    return OLD_GEMINI(msgs)
+
+bot.ask_gemini=fast_chat
+
+
+def price_request(text):
+    norm=re.sub(r'[ًٌٍَُِّْـ]','',text)
+    asset=bool(re.search(r'ذهب|دهب|دولار|gold|dollar|usd',norm,re.I))
+    question=bool(re.search(r'بكام|بكم|كام|سعر|اسعار|أسعار|price|rate|كم سعر',norm,re.I))
+    return text in ('/prices','/gold','/usd') or (asset and question)
+
+
+def news_send(chat,text):
+    # Use text-link entities, not raw encoded Google News story URLs.
+    entities=[];parts=[];pos=0
+    for m in re.finditer(r'https://news\.google\.com/[^\s]+',text):
+        parts.append(text[pos:m.start()]);parts.append('اقرأ الخبر')
+        prefix=''.join(parts[:-1]);entities.append({'type':'text_link','offset':len(prefix.encode('utf-16-le'))//2,'length':len('اقرأ الخبر'),'url':m.group()})
+        pos=m.end()
+    if not entities:return bot.send(chat,text)
+    parts.append(text[pos:]);out=''.join(parts)
+    if len(out)>3900:out=out[:3900];entities=[e for e in entities if e['offset']+e['length']<=len(out.encode('utf-16-le'))//2]
+    result=bot.tg('sendMessage',data={'chat_id':chat,'text':out,'entities':__import__('json').dumps(entities),'disable_web_page_preview':True})
+    if not result.get('ok'):bot.send(chat,re.sub(r'https://news\.google\.com/[^\s]+','المصدر: Google News',text))
+
 
 
 def send_chunks(chat,text):
@@ -48,15 +81,18 @@ def prices():
     return re.sub(r'(?<=\d{4}-\d{2}-\d{2} )\d{2}:\d{2}(?::\d{2})?',lambda m:clock12(m.group()),OLD_PRICES())
 
 
-def headlines():
+def headlines(topic=""):
     now=dt.datetime.now(TZ)
-    if 'news' in CACHE and time.monotonic()-CACHE['news'][0]<300:return CACHE['news'][1]
+    cache_key='news:'+topic
+    if cache_key in CACHE and time.monotonic()-CACHE[cache_key][0]<300:return CACHE[cache_key][1]
     categories=[('WORLD','العالم'),('BUSINESS','اقتصاد'),('TECHNOLOGY','تكنولوجيا'),('SCIENCE','علوم'),('HEALTH','صحة'),('SPORTS','رياضة'),('ENTERTAINMENT','ثقافة وفن')]
+    if topic:categories=[('SEARCH',topic)]
     def read(cat):
         code,label=cat
         try:
             url='https://news.google.com/rss/headlines/section/topic/'+code+'?hl=ar&gl=EG&ceid=EG:ar'
-            r=requests.get(url,timeout=10);r.raise_for_status();rows=[]
+            if topic:url='https://news.google.com/rss/search?'+urllib.parse.urlencode({'q':topic+' when:1d','hl':'ar','gl':'EG','ceid':'EG:ar'})
+            r=requests.get(url,timeout=7);r.raise_for_status();rows=[]
             for item in ET.fromstring(r.content).findall('./channel/item'):
                 pub=parsedate_to_datetime(item.findtext('pubDate')).astimezone(TZ)
                 if pub.date()==now.date() and pub<=now:rows.append((pub,item.findtext('title') or '',item.findtext('link') or ''))
@@ -67,8 +103,8 @@ def headlines():
         except Exception:pass
         return label+': لا يوجد عنوان بتاريخ اليوم قدرت أتحقق منه دلوقتي.'
     with ThreadPoolExecutor(max_workers=4) as pool:parts=list(pool.map(read,categories))
-    out='عناوين عالمية متنوعة من Google News عند الطلب، مش قراءة للمقالات كاملة.\nتم التحقق: '+now.strftime('%Y-%m-%d')+' '+clock12(now.strftime('%H:%M'))+' القاهرة. مش بث لحظي.\n\n'+'\n\n'.join(parts)
-    CACHE['news']=(time.monotonic(),out)
+    out=('عناوين عن '+topic if topic else 'عناوين عالمية متنوعة')+' من Google News عند الطلب، مش قراءة للمقالات كاملة.\nتم التحقق: '+now.strftime('%Y-%m-%d')+' '+clock12(now.strftime('%H:%M'))+' القاهرة. مش بث لحظي.\n\n'+'\n\n'.join(parts)
+    CACHE[cache_key]=(time.monotonic(),out)
     return out
 
 
@@ -86,6 +122,18 @@ def adhkar(evening=False):
 
 def handle(msg):
     text=(msg.get('text') or '').strip();chat=msg['chat']['id']
+    if msg['chat'].get('type')=='private' and price_request(text):
+        started=time.monotonic()
+        try:bot.send(chat,prices())
+        except Exception:bot.send(chat,'مصدر الأسعار مش متاح دلوقتي. مش هخمن رقم. جرّب تاني بعد شوية.')
+        print('prices_seconds',round(time.monotonic()-started,2),flush=True)
+        return
+    if text.startswith('/news') or re.search(r'أخبار|اخبار|الاخبار|الأخبار',text):
+        topic=re.sub(r'^/news\s*','',text).strip() if text.startswith('/news') else text
+        topic=re.sub(r'(?:ممكن|هات|عايز|عاوز|احدث|أحدث|اخر|آخر|النهارده|النهاردة|اليوم|أخبار|اخبار|الأخبار|الاخبار)',' ',topic)
+        topic=re.sub(r'\s+',' ',topic).strip(' ؟?،.')
+        news_send(chat,headlines(topic))
+        return
     if text.startswith('/adhkar') or re.search(r'أذكار|اذكار',text):
         if not re.search(r'مساء|صباح|evening|morning',text,re.I):
             bot.send(chat,'عايز أذكار الصباح ولا المساء؟ ابعت /adhkar صباح أو /adhkar مساء.');return
