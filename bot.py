@@ -3,7 +3,7 @@
 - الردود: Pollinations من غير مفتاح. لو وقف، بيحاول Gemini أو Groq لو فيه مفاتيح (اختياري).
 - الصور: Pollinations (من غير مفتاح)، ولو فشل بيحاول Hugging Face (اختياري).
 """
-import os, io, time, threading, urllib.parse
+import os, io, time, threading, urllib.parse, re
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import requests
 
@@ -18,12 +18,13 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 SYSTEM = ("انت مساعد شخصي ذكي اسمه 'مساعد أحمد'، بتتكلم بالعامية المصرية الطبيعية زي صاحب قريب وفاهم: "
           "دافي وخفيف الدم من غير مبالغة، ومختصر ومباشر. ارد بنفس لغة المستخدم؛ ولو كلمك بالمصري رد بالمصري. "
           "افتكر اللي اتقال في المحادثة وكمّل عليه ومتسألش نفس السؤال مرتين. لو الرسالة قصيرة أو مش واضحة (زي 'اه' أو 'اسمها') اربطها بآخر كلام في المحادثة وكمّل عليه، ولو لسه مش واضح اسأل سؤال واحد بس. "
-          "متخترعش روابط أو مرفقات، ومتقولش إنك بعت صورة. لو مش عارف قول بصراحة. لو حد عايز صورة قوله يكتب: ارسم + الوصف. الفيديو مش متاح.")
+          "أنت تعرف وصف آخر صورة من سجل المحادثة لكن مش شايف الصورة نفسها. لو المستخدم اشتكى من الصورة اعتذر باختصار واطلب التعديل المطلوب من غير ما تدعي إنك فحصتها. متخترعش روابط أو مرفقات، ومتقولش إنك بعت صورة. لو مش عارف قول بصراحة. لو حد عايز صورة قوله يكتب: ارسم + الوصف. الفيديو مش متاح.")
 API = "https://api.telegram.org/bot%s/" % TELEGRAM_TOKEN
 chat_locks = {}
 history = {}          # chat_id -> قايمة رسايل
 last_image = {}       # chat_id -> وقت آخر صورة (عشان نلتزم بحد Pollinations)
 image_lock = threading.Lock()
+last_image_request = {}
 
 IMAGE_WORDS = ("هات صور", "هات صوره", "عايز صور", "عايز صوره", "اعمل صور", "اعملي صور", "ارسم", "إرسم", "ارسملي", "صورة", "صوره", "صور لي", "اعملي صورة", "ولد صورة", "generate image", "draw ")
 
@@ -167,18 +168,34 @@ def make_image(chat_id, text):
     if not data:
         send(chat_id, "معلش، مقدرتش أعمل الصورة دلوقتي. جرب تاني بعد شوية.")
         return
-    tg("sendPhoto", data={"chat_id": chat_id}, files={"photo": ("image.jpg", io.BytesIO(data))})
+    result = tg("sendPhoto", data={"chat_id": chat_id}, files={"photo": ("image.jpg", io.BytesIO(data))})
+    if result.get("ok"):
+        last_image_request[chat_id] = text
+        h = history.setdefault(chat_id, [])
+        h.extend([{"role": "user", "text": text},
+                  {"role": "model", "text": "اتولدت واتبعثت صورة بالوصف ده: " + text +
+                   ". أنا عارف الوصف لكن مش شايف الصورة، ومقدرش أأكد إنها مطابقة من غير فحص."}])
+        del h[:-12]
+    else:
+        send(chat_id, "الصورة اتعملت بس إرسالها فشل. جرب تاني بعد شوية.")
 
 
 def wants_image(text):
     t = text.lower().strip()
-    if t.startswith("/image") or t.startswith("/صورة"):
+    if re.match(r"^/(?:image|صورة)(?:@\w+)?(?:\s|$)", t):
         return True
-    if len(t) > 200:
+    if len(t) > 500:
         return False
-    pic = any(w in t for w in ("صورة", "صوره", "صور ", "رسمة", "رسم", "ارسم", "إرسم", "draw", "image", "picture"))
-    verb = any(w in t for w in ("ارسم", "إرسم", "ولد", "اعمل", "اعملي", "هات", "عايز", "عاوز", "نفسي", "ابعت", "طلع", "draw", "generate", "make", "create"))
-    return pic and (verb or t.startswith(("صورة", "صوره", "رسم")))
+    # Explicit drawing is a request. Questions and criticism about an image are not.
+    if re.match(r"^(?:لو سمحت\s+)?(?:ارسم|إرسم|ارسملي|ارسملى|draw)\b", t):
+        return True
+    if re.search(r"(?:صورة|صوره|الصور|الصورة|الصوره)\s*(?:ايه|إيه|ليه|دي|دى|ده|د[يه]؟)", t):
+        return False
+    if t.startswith(("ايه", "إيه", "ليه", "ازاي", "إزاي", "هو انت", "هل ")):
+        return False
+    pic = re.search(r"(?:صور[ةه]?|رسم[ةه]|image|picture)", t)
+    request = re.match(r"^(?:لو سمحت\s+)?(?:هات|اعمل|اعملي|اعمللي|ولد|ولّد|عايزك|عاوزك|عايز|عاوز|ابعت|طلع|generate|make|create)\b", t)
+    return bool(pic and request)
 
 
 def clean_image_text(text):
@@ -202,6 +219,7 @@ def handle(msg):
         return
     if text.startswith("/reset"):
         history.pop(chat_id, None)
+        last_image_request.pop(chat_id, None)
         send(chat_id, "تمام، مسحت المحادثة.")
         return
     tg("sendChatAction", data={"chat_id": chat_id, "action": "typing"})
