@@ -18,8 +18,9 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 SYSTEM = ("انت مساعد شخصي ذكي اسمه 'مساعد أحمد'، بتتكلم بالعامية المصرية الطبيعية زي صاحب قريب وفاهم: "
           "دافي وخفيف الدم من غير مبالغة، ومختصر ومباشر. ارد بنفس لغة المستخدم؛ ولو كلمك بالمصري رد بالمصري. "
           "افتكر اللي اتقال في المحادثة وكمّل عليه ومتسألش نفس السؤال مرتين. لو الرسالة قصيرة أو مش واضحة (زي 'اه' أو 'اسمها') اربطها بآخر كلام في المحادثة وكمّل عليه، ولو لسه مش واضح اسأل سؤال واحد بس. "
-          "لو مش عارف قول بصراحة. لو حد عايز صورة قوله يكتب: ارسم + الوصف. الفيديو مش متاح.")
+          "متخترعش روابط أو مرفقات، ومتقولش إنك بعت صورة. لو مش عارف قول بصراحة. لو حد عايز صورة قوله يكتب: ارسم + الوصف. الفيديو مش متاح.")
 API = "https://api.telegram.org/bot%s/" % TELEGRAM_TOKEN
+chat_locks = {}
 history = {}          # chat_id -> قايمة رسايل
 last_image = {}       # chat_id -> وقت آخر صورة (عشان نلتزم بحد Pollinations)
 image_lock = threading.Lock()
@@ -30,7 +31,10 @@ IMAGE_WORDS = ("هات صور", "هات صوره", "عايز صور", "عايز 
 def tg(method, **kw):
     r = requests.post(API + method, timeout=70, **kw)
     try:
-        return r.json()
+        data = r.json()
+        if method in ("sendMessage", "sendPhoto"):
+            print("telegram_delivery", method, "ok", data.get("ok"), "message_id", data.get("result", {}).get("message_id"), flush=True)
+        return data
     except Exception:
         return {}
 
@@ -71,7 +75,7 @@ def ask_groq(msgs):
                       headers={"Authorization": "Bearer " + GROQ_KEY},
                       json={"model": GROQ_MODEL, "messages": [{"role": "system", "content": SYSTEM}] +
                             [{"role": "user" if m["role"] == "user" else "assistant", "content": m["text"]} for m in msgs]},
-                      timeout=60)
+                      timeout=12)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"].strip()
 
@@ -91,8 +95,8 @@ def answer(chat_id, text):
     h.append({"role": "user", "text": text})
     del h[:-12]
     providers = []
-    if GROQ_KEY: providers.append(ask_groq)       # لو فيه مفتاح Groq بيبقى الأساسي (أقوى)
     if GEMINI_KEY: providers.append(ask_gemini)
+    if GROQ_KEY: providers.append(ask_groq)
     providers.append(ask_pollinations)            # احتياطي من غير مفتاح
     for p in providers:
         try:
@@ -209,7 +213,8 @@ def handle(msg):
 
 def safe_handle(msg):
     try:
-        handle(msg)
+        with chat_locks.setdefault(msg["chat"]["id"], threading.Lock()):
+            handle(msg)
     except Exception as e:
         print("error:", e)
 
