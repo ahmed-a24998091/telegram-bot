@@ -15,23 +15,35 @@ BASE_WITHOUT_CLOCK = memory_bot.BASE_SYSTEM
 TZ = ZoneInfo('Africa/Cairo')
 
 
+def next_occasion(original,after):
+    for year in range(after.year,after.year+9):
+        try:candidate=original.replace(year=year)
+        except ValueError:continue
+        if candidate>after:return candidate
+    raise ValueError('تعذر حساب المناسبة المقبلة.')
+
+
 def init_reminders():
     with STORE.connect() as c:
         c.execute('''CREATE TABLE IF NOT EXISTS bot_reminders (
             id BIGSERIAL PRIMARY KEY, chat_id BIGINT NOT NULL, body TEXT NOT NULL,
             due TIMESTAMPTZ NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
             created TIMESTAMPTZ NOT NULL DEFAULT NOW())''')
+        c.execute("ALTER TABLE bot_reminders ADD COLUMN IF NOT EXISTS recurrence TEXT")
 
 
 def reminders_loop():
     while True:
         try:
             with STORE.connect() as c:
-                rows = c.execute("SELECT id,chat_id,body,due FROM bot_reminders WHERE status='confirmed' AND due<=NOW() ORDER BY due LIMIT 20 FOR UPDATE SKIP LOCKED").fetchall()
-                for rid, chat, body, due in rows:
+                rows = c.execute("SELECT id,chat_id,body,due,recurrence FROM bot_reminders WHERE status='confirmed' AND due<=NOW() ORDER BY due LIMIT 20 FOR UPDATE SKIP LOCKED").fetchall()
+                for rid, chat, body, due, recurrence in rows:
                     result = bot.tg('sendMessage', data={'chat_id': chat, 'text': 'تذكيرك: ' + body})
                     if result.get('ok'):
-                        c.execute("UPDATE bot_reminders SET status='sent' WHERE id=%s", (rid,))
+                        if recurrence=='yearly':
+                            next_due=next_occasion(due.astimezone(TZ),dt.datetime.now(TZ))
+                            c.execute("UPDATE bot_reminders SET due=%s WHERE id=%s",(next_due,rid))
+                        else:c.execute("UPDATE bot_reminders SET status='sent' WHERE id=%s", (rid,))
         except Exception:
             print('reminder_check_failed', flush=True)
         time.sleep(30)
@@ -50,6 +62,16 @@ def handle(msg):
             days = ['الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد']
             bot.send(chat, f'{days[now.weekday()]} {now:%Y-%m-%d}\nالوقت دلوقتي {now:%H:%M:%S} بتوقيت القاهرة (Africa/Cairo).')
             return
+        if text.startswith('/occasion') or re.search(r'(?:فكرني|فكّرني|ذكرني|ذكّرني).*(?:ميلاد|مناسبه|مناسبة|سنوي)',text):
+            match=re.fullmatch(r'/occasion\s+(\d{2})-(\d{2})\s+(\d{2}:\d{2})\s+(.+)',text,re.S)
+            if not match:
+                bot.send(chat,'للتذكير السنوي ابعت /occasion MM-DD HH:MM اسم المناسبة\nمثال: /occasion 06-15 09:00 عيد ميلاد محمد\nبتوقيت القاهرة، وهعرضه للتأكيد قبل التفعيل. يوم ٢٩ فبراير بيتكرر في السنوات الكبيسة بس. الاستضافة المجانية ممكن تأخر التذكير.');return
+            month,day,clock,body=match.groups()
+            candidate=dt.datetime.fromisoformat('2000-'+month+'-'+day+'T'+clock).replace(tzinfo=TZ)
+            due=next_occasion(candidate,now)
+            with STORE.connect() as c:
+                rid=c.execute("INSERT INTO bot_reminders(chat_id,body,due,recurrence) VALUES (%s,%s,%s,'yearly') RETURNING id",(chat,body[:2000],due)).fetchone()[0]
+            bot.send(chat,f'المناسبة السنوية المقترحة رقم {rid}: {body[:2000]}\nأول مرة {due:%Y-%m-%d %H:%M} بتوقيت القاهرة، وتتكرر كل سنة في نفس التاريخ والوقت.\n٢٩ فبراير في السنوات الكبيسة بس.\nللتفعيل ابعت /confirm {rid}، وللحذف /cancel {rid}. الاستضافة المجانية ممكن تتأخر.');return
         if text.startswith('/remind '):
             match = re.fullmatch(r'/remind\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\s+(.+)', text, re.S)
             if not match:
@@ -80,7 +102,7 @@ def handle(msg):
         if text == '/reminders':
             with STORE.connect() as c:
                 rows = c.execute("SELECT id,body,due,status FROM bot_reminders WHERE chat_id=%s AND status IN ('pending','confirmed') ORDER BY due LIMIT 20", (chat,)).fetchall()
-            bot.send(chat, '\n'.join(f'{r[0]} | {r[2].astimezone(TZ):%Y-%m-%d %H:%M} | {r[1]}' for r in rows) or 'مفيش تذكيرات.')
+            bot.send(chat, '\n'.join(f'{r[0]} | {r[2].astimezone(TZ):%Y-%m-%d %H:%M} | {r[3]} | {r[1]}' for r in rows) or 'مفيش تذكيرات.')
             return
         if re.search(r'(?:فكرني|فكّرني|ذكرني|ذكّرني)', text):
             bot.send(chat, 'علشان أثبت المعاد من غير لخبطة ابعت:\n/remind YYYY-MM-DD HH:MM نص التذكير\nالوقت بتوقيت القاهرة. مثال: /remind 2026-12-01 14:30 اتصل بمحمد\nهعرض المعاد للتأكيد قبل التفعيل. التذكيرات المهمة جداً خليها مع مساعدك الأساسي لأن الاستضافة المجانية ممكن تتأخر.')
@@ -117,7 +139,7 @@ def handle(msg):
             bot.send(chat, result)
             return
         if text in ('/features', '/commands'):
-            bot.send(chat, '/news أخبار عالمية اليوم عند الطلب\n/weather اسم المدينة\n/translate اللغة | النص\nابعت رابط مقال أو يوتيوب لتلخيص المتاح منه\n/remind YYYY-MM-DD HH:MM نص التذكير\n/reminders لعرض التذكيرات\n/cancel رقم لحذف تذكير\n/memory_on و/memory_off\n/remember معلومة\n/forget لمسح الذاكرة')
+            bot.send(chat, '/news أخبار عالمية اليوم عند الطلب\n/weather اسم المدينة\n/translate اللغة | النص\nابعت رابط مقال أو يوتيوب لتلخيص المتاح منه\n/remind YYYY-MM-DD HH:MM نص التذكير\n/occasion MM-DD HH:MM مناسبة سنوية\n/reminders لعرض التذكيرات\n/cancel رقم لحذف تذكير\n/memory_on و/memory_off\n/remember معلومة\n/forget لمسح الذاكرة')
             return
     except ValueError as e:
         bot.send(chat, str(e) if str(e) else 'الصيغة مش واضحة. ابعت /commands')
