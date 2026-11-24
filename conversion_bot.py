@@ -13,11 +13,11 @@ def target_of(text):
  v=words[-1].group();return 'pdf' if re.fullmatch(r'pdf|بي\s*دي\s*اف',v) else 'docx' if v in ('docx','word','وورد','ورد') else 'xlsx' if v in ('xlsx','excel','اكسل','إكسل') else 'csv' if v=='csv' else 'pptx'
 def convert_document(msg,target=''):
  doc=msg['document'];chat=msg['chat']['id'];name=doc.get('file_name','document');ext=name.rsplit('.',1)[-1].lower();target=target or FORMATS.get(ext,('',))[0]
- pairs={('doc','docx'),('xls','xlsx'),('ppt','pptx'),('pdf','docx')}|{(s,'pdf') for s in ('doc','docx','xls','xlsx','ppt','pptx')}|{('xls','csv'),('xlsx','csv')}
+ pairs={('pdf','xlsx'),('docx','xlsx'),('xlsx','docx'),('doc','docx'),('xls','xlsx'),('ppt','pptx'),('pdf','docx')}|{(s,'pdf') for s in ('doc','docx','xls','xlsx','ppt','pptx')}|{('xls','csv'),('xlsx','csv')}
  if not target:
   bot.send(chat,'عايز تحوله لإيه؟ رد على الملف واكتب: حوله PDF أو حوله Word.');return
  if (ext,target)not in pairs:
-  bot.send(chat,'التحويل المباشر المتاح: Word وExcel وPowerPoint إلى PDF، وPDF نصي إلى Word، والملفات القديمة للصيغ الحديثة، وExcel إلى CSV. التحويل لباقي برامج أوفيس محتاج إعادة ترتيب المحتوى مش نسخة مطابقة.');return
+  bot.send(chat,'التحويل المباشر المتاح: Word وExcel وPowerPoint إلى PDF، وPDF نصي إلى Word، والملفات القديمة للصيغ الحديثة، وExcel إلى CSV. واستخراج جداول PDF أوWord إلىExcel، وإعادة بناء جداولExcel فيWord، مش نسخة مطابقة. التحويل لباقي برامج أوفيس محتاج إعادة ترتيب المحتوى مش نسخة مطابقة.');return
  limit=10*1024*1024 if ext=='pdf' else MAX_BYTES
  if doc.get('file_size',0)>limit:
   bot.send(chat,'الحد PDF لحد ١٠ ميجابايت و٢٠ صفحة، وباقي التحويلات ١٥ ميجابايت. ابعت نسخة أصغر.');return
@@ -45,7 +45,9 @@ def convert_document(msg,target=''):
   elif target=='pdf'and not output.startswith(b'%PDF-'):raise ValueError('PDF')
   stem=re.sub(r'[^\w\u0600-\u06ff .-]','_',name.rsplit('.',1)[0])[:100]or'document'
   caption=''
-  if mode=='styled-text-rebuilt':caption='اتعاد تنسيق النص والعناوين عشان يبقى قابل للتعديل. مش نسخة مطابقة من توزيع PDF، والصور والروابط ممكن ما تنتقلش.'
+  if mode=='table-extraction':caption='استخراج الجداول فقط، مش تحويل مطابق للملف. النص خارج الجداول والصور وتوزيع الصفحات مش منتقلين. راجع الخلايا المدمجة واتجاه العربي.'
+  elif mode=='table-rebuild':caption='إعادة بناء جداول الورق في Word، مش تحويل مطابق. الصيغ مكتوبة كنص مش شغالة، والرسومات والأشكال مش منتقلين. حتى٨أعمدة عشان يفضل مقروء.'
+  elif mode=='styled-text-rebuilt':caption='اتعاد تنسيق النص والعناوين عشان يبقى قابل للتعديل. مش نسخة مطابقة من توزيع PDF، والصور والروابط ممكن ما تنتقلش.'
   elif ext=='pdf':caption='تحويل قابل للتعديل مع الحفاظ على التنسيق قدر الإمكان. راجع الجداول والخطوط قبل الاعتماد.'
   elif target=='csv':caption='CSV فيه أول ورقة فقط، من غير تنسيق أو صيغ Excel.'
   info={'chat_id':chat}
@@ -54,7 +56,9 @@ def convert_document(msg,target=''):
   if not result.get('ok'):raise ValueError('delivery')
   print('document_conversion_sent',ext,target,mode,flush=True)
  except Exception:
-  print('document_conversion_failed',ext,target,flush=True);bot.send(chat,'مقدرتش أحول الملف ده. PDF لازم يكون نصي ومش محمي، لحد ٢٠ صفحة و١٠ ميجابايت. الجداول العربية المعقدة أو الصور الممسوحة ضوئياً محتاجة ملف أصلي. وباقي أوفيس لحد ١٥ ميجابايت.')
+  print('document_conversion_failed',ext,target,flush=True)
+  if (ext,target)in {('pdf','xlsx'),('docx','xlsx'),('xlsx','docx')}:bot.send(chat,'مقدرتش أستخرج الجداول دي. لازم جداول نصية واضحة، مش صورة ممسوحة. الحد٢٠جدول و١٠آلاف خلية و٢٠٠٠صف، وWord حتى٨أعمدة عشان يفضل مقروء. جرّب جدول أصغر أو الملف الأصلي.')
+  else:bot.send(chat,'مقدرتش أحول الملف ده. PDF لازم يكون نصي ومش محمي، لحد٢٠صفحة و١٠ميجابايت. الجداول العربية المعقدة أو الصور الممسوحة محتاجة ملف أصلي. وباقي أوفيس لحد١٥ميجابايت.')
  finally:LOCK.release()
 def handle(msg):
  if msg.get('chat',{}).get('type')!='private':return ORIGINAL(msg)
