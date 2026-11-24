@@ -238,6 +238,12 @@ def adhkar(evening=False):
 
 def handle(msg):
     text=(msg.get('text') or '').strip();chat=msg['chat']['id']
+    if text.startswith('/football') or re.search(r'(?:مواعيد|نتايج|نتائج|ماتشات|مباريات).*(?:ماتش|مبار|كوره|كورة|كره|كرة)|^(?:ماتشات|مباريات)(?: النهارده| اليوم)?$',text):
+        try:bot.send(chat,football(text))
+        except Exception:bot.send(chat,'مصدر الماتشات مش متاح دلوقتي، مش هخمن نتايج.')
+        return
+    if text.startswith('/egx') or re.search(r'بورصه|بورصة|سهم.*(?:بكام|سعر)|(?:سعر|بكام).*سهم',text):
+        bot.send(chat,'أسعار البورصة المصرية مش مفعّلة لسه: مصدر مجاني موثوق بوقت بيانات حديث واضح مش متحقق حالياً. مش هخمن أسعار ولا أعرض أرقام قديمة كسعر دلوقتي. المصدر الرسمي: https://www.egx.com.eg/');return
     calc=re.match(r'^(?:/calc|احسب(?:لي|لى)?|إحسب(?:لي|لى)?|احسبي|calculate)\s*(.*)$',text,re.I)
     if calc:
         try:bot.send(chat,'الناتج الدقيق: '+exact_calculate(calc.group(1)))
@@ -334,3 +340,29 @@ def joke_reply(text):
     if not re.fullmatch(r'/joke|(?:(?:قول|قولي|قوللي|هات|هاتلي|احكي|احكيلي|عايز|عاوز|ابعت|ابعتلي)\s+)?(?:نكته|نكت|قفشه|قفشات)(?:\s+(?:جديده|تضحك|حلوه|مصريه))?[؟?!. ]*',norm):return None
     import secrets
     return secrets.choice(JOKES)
+
+
+def football(text=''):
+    now=dt.datetime.now(TZ)
+    leagues={'uefa.champions':('أبطال أوروبا',r'ابطال|أبطال|champions'),'eng.1':('الدوري الإنجليزي',r'انجليزي|إنجليزي|premier'),'esp.1':('الدوري الإسباني',r'اسباني|إسباني|la liga'),'ita.1':('الدوري الإيطالي',r'ايطالي|إيطالي|serie'),'ger.1':('الدوري الألماني',r'الماني|ألماني|bundes'),'fra.1':('الدوري الفرنسي',r'فرنسي|ligue'),'sau.1':('الدوري السعودي',r'سعودي|saudi')}
+    if re.search(r'مصري|اهلي|أهلي|زمالك',text,re.I):return 'الدوري المصري مش متاح من مصدر الماتشات الحالي. أقدر أجيب أبطال أوروبا والإنجليزي والإسباني والإيطالي والألماني والفرنسي والسعودي.'
+    selected=[k for k,(_,pattern) in leagues.items() if re.search(pattern,text,re.I)]or['uefa.champions','eng.1','esp.1']
+    target=now.date()+dt.timedelta(days=1 if re.search(r'بكره|بكرة|غدا|غداً|tomorrow',text,re.I) else -1 if re.search(r'امبارح|أمس|امس|yesterday',text,re.I) else 0)
+    key='football:'+str(target)+':'+','.join(selected)
+    if key in CACHE and time.monotonic()-CACHE[key][0]<120:return CACHE[key][1]
+    rows=['ماتشات '+target.isoformat()+' | توقيت القاهرة','بيانات ESPN عند الطلب، ممكن تتأخر. وقت التحقق '+now.strftime('%Y-%m-%d %H:%M')]
+    for league in selected:
+        url='https://site.api.espn.com/apis/site/v2/sports/soccer/'+league+'/scoreboard'
+        try:
+            r=requests.get(url,params={'dates':target.strftime('%Y%m%d'),'limit':100},timeout=10);r.raise_for_status();events=r.json().get('events',[]);found=[]
+            for e in events:
+                comp=e['competitions'][0];when=dt.datetime.fromisoformat(comp['date'].replace('Z','+00:00')).astimezone(TZ)
+                if when.date()!=target:continue
+                teams=comp['competitors'];home=next(x for x in teams if x['homeAway']=='home');away=next(x for x in teams if x['homeAway']=='away');status=comp.get('status',e.get('status',{}));state=status.get('type',{}).get('state');detail=status.get('type',{}).get('detail','') if state in ('in','post') else 'لم تبدأ'
+                pair=home['team']['displayName']+' × '+away['team']['displayName']
+                result=home.get('score','?')+' - '+away.get('score','?') if state in ('in','post') else when.strftime('%H:%M')
+                found.append(pair+' | '+result+' | '+detail)
+            rows.append(leagues[league][0]+'\n'+('\n'.join(found[:12])or'لا توجد مباريات في التاريخ المطلوب حسب المصدر.'))
+        except Exception:rows.append(leagues[league][0]+': المصدر غير متاح دلوقتي.')
+    rows.append('المصدر: https://www.espn.com/soccer/scoreboard')
+    out='\n\n'.join(rows);CACHE[key]=(time.monotonic(),out);return out
