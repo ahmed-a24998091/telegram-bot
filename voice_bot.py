@@ -1511,6 +1511,21 @@ conversion_bot.finish_bot.EXTRA.reminders_loop=functional_reminders_loop
 MENU_SECTIONS['settings'][1].append(('حالة الاستقبال والمجدول','task:status'))
 MENU_TASKS['status']='مؤشرات الاستقبال والمجدول للعملية الحالية: /status. ليست اختباراً لكل الخدمات أو ضماناً للاستمرار.'
 
+# Only one unfinished text-intake form per chat. Completed reports remain available.
+INTAKE_COMMANDS={'/proofnew':'proof','/reviewnew':'review','/studynew':'study','/academicnew':'study','/feasibilitynew':'financial'}
+INTAKE_INNER=bot.handle
+def focused_intake_handle(msg):
+ if msg.get('chat',{}).get('type')!='private':return INTAKE_INNER(msg)
+ chat=msg['chat']['id'];text=(msg.get('text')or'').strip()
+ command='/'+text.split()[-1]if text.startswith('/menu_task ')else text
+ selected=INTAKE_COMMANDS.get(command)
+ if selected:
+  for kind,states in [('proof',PROOF_STATE),('review',REVIEW_STATE),('study',STUDY_STATE)]:
+   if kind!=selected and states.get(chat,{}).get('awaiting'):states.pop(chat,None)
+  if selected!='financial':FEASIBILITY_STATE.pop(chat,None)
+ return INTAKE_INNER(msg)
+bot.handle=focused_intake_handle
+
 if __name__=='__main__':
     initialize_menu()
     conversion_bot.finish_bot.EXTRA.init_reminders()
