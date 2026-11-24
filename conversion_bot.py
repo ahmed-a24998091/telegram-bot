@@ -8,7 +8,7 @@ import bot
 import finish_bot
 
 ORIGINAL=bot.handle
-MAX_BYTES=5*1024*1024
+MAX_BYTES=15*1024*1024
 FORMATS={'doc':('docx','application/vnd.openxmlformats-officedocument.wordprocessingml.document'),'xls':('xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),'ppt':('pptx','application/vnd.openxmlformats-officedocument.presentationml.presentation')}
 LOCK=threading.Lock()
 
@@ -16,7 +16,7 @@ LOCK=threading.Lock()
 def convert_document(msg):
     doc=msg['document'];chat=msg['chat']['id'];name=doc.get('file_name','document.doc');ext=name.rsplit('.',1)[-1].lower()
     if doc.get('file_size',0)>MAX_BYTES:
-        bot.send(chat,'التحويل للملفات القديمة لحد ٥ ميجابايت. ابعت نسخة أصغر.');return
+        bot.send(chat,'التحويل للملفات القديمة لحد ١٥ ميجابايت. ابعت نسخة أصغر.');return
     url=os.environ.get('CONVERTER_URL','').rstrip('/');key=os.environ.get('CONVERTER_KEY','')
     if not url.startswith('https://') or not key:
         bot.send(chat,'خدمة التحويل مش جاهزة حالياً. جرّب بعدين.');return
