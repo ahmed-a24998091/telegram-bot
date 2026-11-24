@@ -95,6 +95,7 @@ def exact_calculate(expr):
 
 
 def price_request(text):
+    if text.startswith(('/price_alert','/price_confirm')):return False
     norm=re.sub(r'[ًٌٍَُِّْـ]','',text)
     asset=bool(re.search(r'ذهب|دهب|دولار|gold|dollar|usd',norm,re.I))
     question=bool(re.search(r'بكام|بكم|كام|سعر|اسعار|أسعار|price|rate|كم سعر',norm,re.I))
