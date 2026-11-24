@@ -310,7 +310,7 @@ def source_request(msg):
     result=discovery(text[len(cmd):],mode)
     if mode!='images'and 'المصادر:'in result:
      SOURCE_DOSSIERS[chat]={'time':time.monotonic(),'text':result}
-     if len(SOURCE_DOSSIERS)>100:SOURCE_DOSSIERS.pop(min(SOURCE_DOSSIERS,key=lambda k:SOURCE_DOSSIERS[k]['time']),None)
+     # Expiry housekeeping replaces silent oldest-session eviction.
     bot.send(chat,result+'\n\n/sourceexport word أو /sourceexport pdf لآخر سجل.'if mode!='images'and 'المصادر:'in result else result)
    except Exception:bot.send(chat,'مصدر البحث المجاني مش متاح دلوقتي. مش هخمن إجابة أو مراجع.')
    finally:SOURCE_LOCK.release()
@@ -584,7 +584,7 @@ def study_request(msg):
  if text.startswith('/studytext ')or state.get('awaiting')and not text.startswith('/'):
   try:
    source,name=study_load(msg)
-   if len(STUDY_STATE)>100:STUDY_STATE.pop(min(STUDY_STATE,key=lambda k:STUDY_STATE[k].get('time',0)),None)
+   # Expiry housekeeping replaces silent oldest-session eviction.
    STUDY_STATE[chat]={'text':source,'source':name,'time':time.monotonic()};study_buttons(chat)
   except ValueError as e:bot.send(chat,str(e))
   except Exception:bot.send(chat,'مقدرتش أقرأ مصدر الدراسة. جرّب نص منسوخ أو ملف نصي واضح.')
@@ -949,7 +949,7 @@ def review_request(msg):
    else:
     value,name=study_load(msg);report=review_analyze(value,name);state={'text':value,'source':name}
    state.update(report=report,time=time.monotonic(),awaiting=False);REVIEW_STATE[chat]=state
-   if len(REVIEW_STATE)>80:REVIEW_STATE.pop(min(REVIEW_STATE,key=lambda k:REVIEW_STATE[k].get('time',0)),None)
+   # Expiry housekeeping replaces silent oldest-session eviction.
    bot.send(chat,'اتجهز تقرير مراجعة النص، ليس كشف AI أو حكم انتحال. اختار Word أو PDF. لم أستخدم كاشفاً أو نسبة دقة. للمقارنة مع نص آخر قدمته أنت: /reviewcompare ثم النص.')
    bot.tg('sendMessage',data={'chat_id':chat,'text':'تصدير التقرير الكامل وحدوده','reply_markup':json.dumps({'inline_keyboard':[[{'text':'تقرير Word','callback_data':'review:word'},{'text':'تقرير PDF','callback_data':'review:pdf'}]]},ensure_ascii=False)})
   except ValueError as e:bot.send(chat,str(e))
@@ -1424,7 +1424,7 @@ def proof_handle(msg):
   try:
    if msg.get('document')or msg.get('photo'):raise ValueError('هذه الجلسة نص فقط. ابعت النص منسوخاً.')
    original=msg.get('text')or'';edits,rejected=proof_proposals(original);state={'text':original,'source':'نص مرسل من المستخدم','edits':edits,'rejected':rejected,'time':time.monotonic()};PROOF_STATE[chat]=state
-   if len(PROOF_STATE)>100:PROOF_STATE.pop(min(PROOF_STATE,key=lambda k:PROOF_STATE[k]['time']),None)
+   # Expiry housekeeping replaces silent oldest-session eviction.
    preview=proof_report(state);bot.send(chat,(preview if len(preview)<=3200 else preview[:3000]+'\n[عرض مختصر، التصدير يحتوي الأصل والمقترحات كاملة]')+'\n\n/proofexport word أو /proofexport pdf')
   except ValueError as e:bot.send(chat,str(e))
   except Exception:bot.send(chat,'تعذرت المراجعة اللغوية. لم أغير نصك، جرب لاحقاً.')
@@ -1545,9 +1545,74 @@ def forget_cache_handle(msg):
   forget_legacy_caches(chat);LAST_OUTPUT.pop(chat,None)
 bot.handle=forget_cache_handle
 
+# Expire inactive per-chat context even when nobody returns to that chat.
+# Handler/send activity is registered before any state mutation. Housekeeping
+# never evicts a live handler and never holds its lock during network calls.
+TRANSIENT_LOCK=threading.RLock()
+TRANSIENT_ACTIVE={}
+TRANSIENT_INTERVAL=60
+
+def transient_stores():
+ import intent_bundle
+ return [(LAST_OUTPUT,600,lambda v:v['time']),
+         (FOLLOW_CONTEXT,600,lambda v:v['time']),
+         (SOURCE_DOSSIERS,3600,lambda v:v['time']),
+         (office_flow.LAST,1800,lambda v:v[0]),
+         (intent_bundle.LAST_PHOTO,600,lambda v:v),
+         (intent_bundle.CLOCK_CONTEXT,600,lambda v:v),
+         (PENDING_MEDIA,3600,lambda v:v['time']),
+         (STUDY_STATE,3600,lambda v:v['time']),
+         (REVIEW_STATE,3600,lambda v:v['time']),
+         (PROOF_STATE,3600,lambda v:v['time']),
+         (FEASIBILITY_STATE,3600,lambda v:v)]
+
+def transient_enter(chat):
+ with TRANSIENT_LOCK:TRANSIENT_ACTIVE[chat]=TRANSIENT_ACTIVE.get(chat,0)+1
+
+def transient_leave(chat):
+ with TRANSIENT_LOCK:
+  count=TRANSIENT_ACTIVE.get(chat,0)-1
+  if count>0:TRANSIENT_ACTIVE[chat]=count
+  else:TRANSIENT_ACTIVE.pop(chat,None)
+
+def transient_sweep(now=None):
+ now=time.monotonic()if now is None else now
+ removed=0
+ with TRANSIENT_LOCK:
+  for states,ttl,stamp in transient_stores():
+   for chat,value in list(states.items()):
+    if TRANSIENT_ACTIVE.get(chat):continue
+    try:expired=now-stamp(value)>=ttl
+    except (KeyError,TypeError,ValueError,IndexError):expired=True
+    if expired:states.pop(chat,None);removed+=1
+ return removed
+
+TRANSIENT_INNER=bot.handle
+TRANSIENT_SEND=bot.send
+def transient_handle(msg):
+ chat=msg.get('chat',{}).get('id')
+ transient_enter(chat)
+ try:return TRANSIENT_INNER(msg)
+ finally:transient_leave(chat)
+
+def transient_send(chat,text):
+ transient_enter(chat)
+ try:return TRANSIENT_SEND(chat,text)
+ finally:transient_leave(chat)
+
+bot.handle=transient_handle
+bot.send=transient_send
+
+def transient_cleanup_loop():
+ while True:
+  time.sleep(TRANSIENT_INTERVAL)
+  try:transient_sweep()
+  except Exception:print('transient_cleanup_failed',flush=True)
+
 if __name__=='__main__':
     initialize_menu()
     conversion_bot.finish_bot.EXTRA.init_reminders()
     threading.Thread(target=conversion_bot.finish_bot.EXTRA.reminders_loop,daemon=True).start()
+    threading.Thread(target=transient_cleanup_loop,daemon=True).start()
     print('voice_conversion_ready',flush=True)
     bot.main()
