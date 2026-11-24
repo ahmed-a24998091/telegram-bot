@@ -29,6 +29,19 @@ def rtl(p):
         r._element.get_or_add_rPr().append(OxmlElement('w:rtl'))
 
 
+def readable_links(p):
+    # Keep source URLs in native hyperlinks, never print giant encoded tokens.
+    text=p.text
+    if not re.search(r'https?://',text):return
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+    for run in list(p._p):
+        if run.tag!=qn('w:pPr'):p._p.remove(run)
+    for part in re.split(r'(https?://[^\s]+)',text):
+        if not part.startswith(('https://','http://')):p.add_run(part);continue
+        h=OxmlElement('w:hyperlink');h.set(qn('r:id'),p.part.relate_to(part,RT.HYPERLINK,is_external=True))
+        r=OxmlElement('w:r');pr=OxmlElement('w:rPr');color=OxmlElement('w:color');color.set(qn('w:val'),'397467');pr.append(color);u=OxmlElement('w:u');u.set(qn('w:val'),'single');pr.append(u);r.append(pr);t=OxmlElement('w:t');t.text='المصدر';r.append(t);h.append(r);p._p.append(h)
+
+
 def word(data):
     from docx import Document
     d=Document();sec=d.sections[0];sec.top_margin=sec.bottom_margin=Inches(.8);sec.left_margin=sec.right_margin=Inches(.85)
@@ -54,8 +67,10 @@ def word(data):
             for row in t.rows:
                 for cell in row.cells:
                     for p in cell.paragraphs:
+                        readable_links(p)
                         if re.search('[\u0600-\u06ff]',p.text):rtl(p)
     for p in d.paragraphs:
+        readable_links(p)
         if re.search('[\u0600-\u06ff]',p.text):rtl(p)
     footer=sec.footer.paragraphs[0];footer.alignment=WD_ALIGN_PARAGRAPH.CENTER
     run=footer.add_run();field=OxmlElement('w:fldSimple');field.set(qn('w:instr'),'PAGE');run._r.append(field)
