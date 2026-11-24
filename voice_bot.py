@@ -9,6 +9,7 @@ import threading
 import requests
 import bot
 import conversion_bot
+import office_flow
 
 ORIGINAL=bot.handle
 LOCK=threading.BoundedSemaphore(2)
@@ -41,7 +42,9 @@ def say(chat,text):
 
 
 def handle(msg):
-    text=(msg.get('text') or '').strip();prompt=voice_request(text)
+    text=(msg.get('text') or '').strip()
+    if office_flow.kind_of(text or msg.get('caption','')):return ORIGINAL(msg)
+    prompt=voice_request(text)
     if prompt is None or msg['chat'].get('type')!='private':return ORIGINAL(msg)
     chat=msg['chat']['id']
     if not LOCK.acquire(False):bot.send(chat,'الصوت مشغول دلوقتي. جرّب بعد شوية.');return
