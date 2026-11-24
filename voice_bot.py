@@ -21,6 +21,10 @@ def task_handle(msg):
     text=msg['text'].strip();chat=msg['chat']['id'];tasks=split_tasks(text)
     if re.fullmatch(r'/start(?:@\w+)?|(?:انت|أنت|انتا) مين[؟?!. ]*|(?:قدم|قدّم|عرف|عرّف) نفسك[؟?!. ]*|who are you[?!. ]*',text,re.I):
         bot.send(chat,INTRO);return
+    for feature in (finish_bot.joke_reply,finish_bot.scripture_reply):
+        result=feature(text)
+        if result is not None:
+            bot.send(chat,result);return
     if len(tasks)>1:
         if len(tasks)>4:
             bot.send(chat,'أقدر أتابع لحد ٤ مهام في الرسالة. ابعتهم على دفعات.');return
