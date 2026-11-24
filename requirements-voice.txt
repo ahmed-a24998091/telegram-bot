@@ -1,2 +1,3 @@
 -r requirements-files.txt
 imageio-ffmpeg
+edge-tts
