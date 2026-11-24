@@ -14,6 +14,21 @@ EXTRA=intent_bundle.office_bot.generate_bot.daily_bot.extra_bot
 DAILY=intent_bundle.office_bot.generate_bot.daily_bot
 TZ=EXTRA.TZ
 CACHE={}
+BASE_SEND=bot.send
+
+
+def send_chunks(chat,text):
+    chunk=''
+    for line in str(text).splitlines(keepends=True):
+        if len(chunk)+len(line)>3800 and chunk:
+            BASE_SEND(chat,chunk.rstrip());chunk=''
+        while len(line)>3800:
+            BASE_SEND(chat,line[:3800]);line=line[3800:]
+        chunk+=line
+    if chunk:BASE_SEND(chat,chunk.rstrip())
+
+
+bot.send=send_chunks
 
 
 def clock12(value):
