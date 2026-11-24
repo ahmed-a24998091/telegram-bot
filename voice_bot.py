@@ -14,10 +14,13 @@ import office_flow
 import finish_bot
 from finish_bot import split_tasks,news_topic,chain_parts,NEWS
 TASK_ORIGINAL=bot.handle
+INTRO='أنا رفيقك في السؤال والفكرة 💡 تسألني نفهمها سوا، تبعتلي كلام أرتبهولك، أو ملف نطلع أهم اللي فيه. وبحب الكلام البسيط والمصري من غير لف ودوران.\n\nأقدر أساعدك في الكتابة والترجمة والأفكار والصور وقراءة النصوص والملفات المدعومة. ولو مش عارف حاجة هقولك، ولو محتاج تفصيلة هسألك بدل ما أخمن.'
 
 def task_handle(msg):
     if msg['chat'].get('type')!='private' or not msg.get('text'):return TASK_ORIGINAL(msg)
     text=msg['text'].strip();chat=msg['chat']['id'];tasks=split_tasks(text)
+    if re.fullmatch(r'/start(?:@\w+)?|(?:انت|أنت|انتا) مين[؟?!. ]*|(?:قدم|قدّم|عرف|عرّف) نفسك[؟?!. ]*|who are you[?!. ]*',text,re.I):
+        bot.send(chat,INTRO);return
     if len(tasks)>1:
         if len(tasks)>4:
             bot.send(chat,'أقدر أتابع لحد ٤ مهام في الرسالة. ابعتهم على دفعات.');return
@@ -83,7 +86,7 @@ def handle(msg):
     if not LOCK.acquire(False):bot.send(chat,'الصوت مشغول دلوقتي. جرّب بعد شوية.');return
     answer=''
     try:
-        answer=bot.answer(chat,'الصوت متاح فعلياً وسيتم تحويل ردك إلى رسالة صوتية، فلا تنكر القدرة على إرسال الصوت ولا تعرض مجرد كتابة بديل. لو طُلب تعريفك بنفسك لا تذكر أحمد وكن صادقاً بشأن كونك مساعداً رقمياً. جاوب بالمصري في جمل قصيرة مناسبة للسمع، من غير ماركداون، بحد أقصى ٥٠٠ حرف. لو السؤال محتاج بيانات حالية مش عندك قول ده بوضوح ومتخمنش. السؤال: '+prompt)
+        answer=INTRO if re.search(r'قدم.*نفسك|قدّم.*نفسك|عرف.*نفسك|عرّف.*نفسك|انت مين|أنت مين',prompt) else bot.answer(chat,'الصوت متاح فعلياً وسيتم تحويل ردك إلى رسالة صوتية، فلا تنكر القدرة على إرسال الصوت ولا تعرض مجرد كتابة بديل. لو طُلب تعريفك بنفسك لا تذكر أحمد وكن صادقاً بشأن كونك مساعداً رقمياً. جاوب بالمصري في جمل قصيرة مناسبة للسمع، من غير ماركداون، بحد أقصى ٥٠٠ حرف. لو السؤال محتاج بيانات حالية مش عندك قول ده بوضوح ومتخمنش. السؤال: '+prompt)
         if not answer or len(answer)>1200:raise ValueError('length')
         say(chat,answer)
         print('voice_reply_sent',flush=True)
