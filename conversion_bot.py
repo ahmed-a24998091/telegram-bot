@@ -60,8 +60,27 @@ def convert_document(msg,target=''):
   if (ext,target)in {('pdf','xlsx'),('docx','xlsx'),('xlsx','docx')}:bot.send(chat,'مقدرتش أستخرج الجداول دي. لازم جداول نصية واضحة، مش صورة ممسوحة. الحد٢٠جدول و١٠آلاف خلية و٢٠٠٠صف، وWord حتى٨أعمدة عشان يفضل مقروء. جرّب جدول أصغر أو الملف الأصلي.')
   else:bot.send(chat,'مقدرتش أحول الملف ده. PDF لازم يكون نصي ومش محمي، لحد٢٠صفحة و١٠ميجابايت. الجداول العربية المعقدة أو الصور الممسوحة محتاجة ملف أصلي. وباقي أوفيس لحد١٥ميجابايت.')
  finally:LOCK.release()
+SCAN_NOTE='الملف حافظ شكل الصفحة كصورة داخل Word، مش نص أو جدول قابل للتعديل بالكامل. أي تفريغ نصي مضاف غير متحقق منه ولازم تراجعه؛ الكلمات غير الواضحة معلّمة. الشكل والخط محفوظين كصورة، والخط في النص القابل للتعديل تقريبي مش مطابق. التحويل القابل للتعديل بنفس التخطيط لسه غير مكتمل.'
+def convert_scan(msg,media):
+ chat=msg['chat']['id'];item=max(media['photo'],key=lambda x:x.get('file_size',0))if media.get('photo')else media['document'];ext='scan'if item.get('file_name','').lower().endswith('.pdf')else'image'
+ if item.get('file_size',0)>8*1024*1024:bot.send(chat,'الصورة أو المسح لحد٨ميجابايت وخمس صفحات PDF.');return
+ if not LOCK.acquire(False):bot.send(chat,'في ملف بيتحول. جرّب بعد دقيقة.');return
+ try:
+  bot.send(chat,'جاري التحويل');meta=bot.tg('getFile',data={'file_id':item['file_id']});r=requests.get('https://api.telegram.org/file/bot'+bot.TELEGRAM_TOKEN+'/'+meta['result']['file_path'],timeout=40);r.raise_for_status();data=r.content
+  if len(data)>8*1024*1024:raise ValueError('size')
+  url=os.environ['CONVERTER_URL'].rstrip('/');requests.get(url+'/health',timeout=95).raise_for_status();r=requests.post(url+'/convert',data=data,headers={'Authorization':'Bearer '+os.environ['CONVERTER_KEY'],'X-Format':ext,'X-Target':'docx'},timeout=95);r.raise_for_status()
+  if len(r.content)>MAX_BYTES:raise ValueError('output')
+  with zipfile.ZipFile(io.BytesIO(r.content))as z:
+   if 'word/document.xml'not in z.namelist():raise ValueError('docx')
+  result=bot.tg('sendDocument',data={'chat_id':chat,'caption':SCAN_NOTE},files={'document':('scan-preserved.docx',io.BytesIO(r.content),MIME['docx'])})
+  if not result.get('ok'):raise ValueError('send')
+ except Exception:bot.send(chat,'مقدرتش أحفظ المسح ده بشكل سليم. ابعت صورة أوضح أو PDF لحد٥صفحات و٨ميجابايت. مش هبعت نص مشوّه.')
+ finally:LOCK.release()
 def handle(msg):
  if msg.get('chat',{}).get('type')!='private':return ORIGINAL(msg)
+ text=msg.get('caption')or msg.get('text','');media=msg if msg.get('photo')or msg.get('document',{}).get('mime_type','').startswith('image/')else msg.get('reply_to_message',{})
+ if target_of(text)=='docx'and(media.get('photo')or media.get('document',{}).get('mime_type','').startswith('image/')):return convert_scan(msg,media)
+ if target_of(text)=='docx'and re.search(r'مسح|ممسوح|سكان|scan',text,re.I)and(msg.get('document')or msg.get('reply_to_message',{}).get('document')):return convert_scan(msg,msg if msg.get('document')else msg['reply_to_message'])
  current=msg.get('document');reply=msg.get('reply_to_message',{}).get('document');text=msg.get('caption')or msg.get('text','')
  document=current or(reply if re.search(r'حول|حوّل|convert|تحويل',text,re.I)else None)
  if document:
