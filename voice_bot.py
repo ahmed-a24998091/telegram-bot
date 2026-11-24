@@ -777,6 +777,23 @@ def contextual_handle(msg):
  return result
 bot.handle=contextual_handle
 
+
+HELP_BASE=bot.handle
+def accurate_help_handle(msg):
+ text=(msg.get('text')or'').strip();chat=msg['chat']['id']
+ if msg['chat'].get('type')=='private'and text in('/help','/commands','/features'):
+  bot.send(chat,'افتح /menu للأقسام والأزرار.\nصورة أو ملف بلا طلب: أسألك تختار العملية، وأتذكر الملف ساعة في نفس الشات. اكتب كبرها أو شيل الخلفية بعد الصورة أو رد عليها. يمكن استخراج نص أو وصف أو Word كصورة، وليس Word بنفس التخطيط قابل للتحرير.\n/studynew دراسة من نص أو ملف ثم شرح/تلخيص/أسئلة/خطة وتصدير.\n/weather المدينة، /prayer المدينة، /time المدينة. بعد طلب مكان يمكن وفي لندن؟، وبعد مكان محدد والصلاة؟ أو والطقس؟ خلال عشر دقائق.\n/wiki و/papers و/imagesearch و/research مصادر محدودة، مش Google ولا قراءة أوراق كاملة.\nالردود النصية: رد على رسالة واكتب لخصه أو اشرحه، أو على آخر رد خلال عشر دقائق.\nالصوت الوارد حالياً تفريغ نصي، ليس تنفيذ كل أمر صوتي تلقائياً. /voice للرد الصوتي.\n/forget لمسح المحفوظ والمراجع المؤقتة، مش رسائل Telegram.\nالتنبيهات تحتاج إعداداً وتأكيداً صريحاً. لا تنبيهات مفعلة من فتح القائمة. الاستضافة والمصادر المجانية ممكن تتأخر أو تتوقف.');return
+ return HELP_BASE(msg)
+bot.handle=accurate_help_handle
+
+
+NEWS_BASE_SUMMARY=finish_bot.summary_news
+NEWS_TOPIC_ALIASES={'technology':'تكنولوجيا','tech':'تكنولوجيا','science':'علوم','health':'صحة','business':'اقتصاد','economy':'اقتصاد','sports':'رياضة','sport':'رياضة','world':'','global':'','latest':'','entertainment':'ثقافة','ai':'ذكاء اصطناعي','artificial intelligence':'ذكاء اصطناعي'}
+def normalized_news_summary(topic=''):
+ key=topic.strip().casefold();topic=NEWS_TOPIC_ALIASES.get(key,topic)
+ return NEWS_BASE_SUMMARY(topic)
+finish_bot.summary_news=normalized_news_summary;finish_bot.headlines=normalized_news_summary;finish_bot.EXTRA.fresh_headlines=normalized_news_summary
+
 if __name__=='__main__':
     initialize_menu()
     conversion_bot.finish_bot.EXTRA.init_reminders()
