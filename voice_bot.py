@@ -1077,9 +1077,15 @@ def feasibility_parse(text):
  if set(values)!=set(FEASIBILITY_FIELDS):raise ValueError('ابعت الحقول السبعة كما هي. لا أملأ أرقاماً من عندي.')
  if not(1<=len(values['اسم المشروع'])<=100 and 1<=len(values['العملة'])<=25):raise ValueError('اسم المشروع أو العملة غير مناسب.')
  for k in FEASIBILITY_FIELDS[2:]:
-  try:n=Decimal(values[k].translate(str.maketrans('٠١٢٣٤٥٦٧٨٩٫','0123456789.')))
+  raw=values[k].translate(str.maketrans('٠١٢٣٤٥٦٧٨٩٫','0123456789.'))
+  if len(raw)>120 or not re.fullmatch(r'[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)',raw):raise ValueError('اكتب رقماً عشرياً عادياً بدون صيغة أسية أو فواصل آلاف: '+k)
+  try:n=Decimal(raw)
   except InvalidOperation:raise ValueError('قيمة رقمية غير صالحة: '+k)
   if not n.is_finite()or n<0 or n>Decimal('1000000000000'):raise ValueError('قيمة خارج الحد: '+k)
+  # Excel preserves up to 15 significant decimal digits. Never round input silently.
+  digits=list(n.as_tuple().digits);exponent=n.as_tuple().exponent
+  while digits and digits[-1]==0:digits.pop();exponent+=1
+  if n and (len(digits)>15 or exponent < -6):raise ValueError('الدقة المدعومة حتى6منازل عشرية و15رقماً مؤثراً. قلل الدقة بنفسك ثم أعد الإرسال، لم أغير رقمك: '+k)
   values[k]=n
  if values['سعر الوحدة']<=0:raise ValueError('سعر الوحدة لازم أكبر من صفر.')
  return values
@@ -1120,7 +1126,7 @@ def feasibility_workbook(v):
    for c in row:c.font=Font(name='Arial',size=11,color='251F21');c.alignment=Alignment(horizontal='right',vertical='center',wrap_text=True)
   for c in ws[1]:c.alignment=Alignment(horizontal='right',vertical='center',wrap_text=True)
   ws.row_dimensions[1].height=30
- for row in range(4,9):i.cell(row,2).number_format='#,##0.00';i.cell(row,2).fill=PatternFill('solid',fgColor='F4EFEC')
+ for row in range(4,9):i.cell(row,2).number_format='#,##0.######';i.cell(row,2).fill=PatternFill('solid',fgColor='F4EFEC')
  for row in range(2,10):r.cell(row,2).number_format='#,##0.00'
  for row in range(2,5):s.cell(row,1).number_format='0%';s.cell(row,3).number_format='#,##0.00'
  out=io.BytesIO();w.save(out);out.seek(0);return out
@@ -1129,7 +1135,7 @@ def feasibility_request(msg):
  chat=msg['chat']['id'];text=(msg.get('text')or'').strip()
  if text in('/forget','/reset'):FEASIBILITY_STATE.pop(chat,None);return False
  if text in('/feasibilitynew','/menu_task feasibilitynew'):
-  FEASIBILITY_STATE[chat]=time.monotonic();bot.send(chat,'نموذج مالي أولي بأرقامك، مش دراسة سوق مختلقة. ابعت السبع سطور التالية مع قيمة لكل حقل بعد النقطتين. الأرقام بعملة واحدة، الكمية شهرية، ومشروع منتج واحد. صفر مسموح للتكلفة، وليس افتراضاً مني.\n\n'+'\n'.join(k+':'for k in FEASIBILITY_FIELDS)+'\n\n/cancel للإلغاء.');return True
+  FEASIBILITY_STATE[chat]=time.monotonic();bot.send(chat,'نموذج مالي أولي بأرقامك، مش دراسة سوق مختلقة. ابعت السبع سطور التالية مع قيمة لكل حقل بعد النقطتين. الأرقام بعملة واحدة، الكمية شهرية، ومشروع منتج واحد. صفر مسموح للتكلفة، وليس افتراضاً مني. الأرقام حتى6منازل عشرية و15رقماً مؤثراً، بدون صيغة أسية أو فواصل آلاف.\n\n'+'\n'.join(k+':'for k in FEASIBILITY_FIELDS)+'\n\n/cancel للإلغاء.');return True
  if text=='/cancel'and chat in FEASIBILITY_STATE:FEASIBILITY_STATE.pop(chat,None);bot.send(chat,'اتلغى إدخال النموذج المالي.');return True
  if chat not in FEASIBILITY_STATE or text.startswith('/'):return False
  if time.monotonic()-FEASIBILITY_STATE[chat]>3600:FEASIBILITY_STATE.pop(chat,None);bot.send(chat,'انتهت جلسة الإدخال. ابعت /feasibilitynew.');return True
@@ -1153,16 +1159,16 @@ MENU_TASKS['feasibility_help']='استكمال دراسة حقيقية يحتا�
 
 
 def feasibility_report(chat,v):
- from decimal import Decimal,ROUND_CEILING
+ from decimal import Decimal,ROUND_CEILING,ROUND_HALF_UP
  price=v['سعر الوحدة'];cost=v['تكلفة الوحدة المتغيرة'];qty=v['وحدات المبيعات الشهرية'];fixed=v['التكلفة الثابتة الشهرية'];initial=v['الاستثمار الأولي'];margin=price-cost;profit=margin*qty-fixed
- unit=v['العملة'];fmt=lambda n:format(n.quantize(Decimal('.01')),',.2f')
+ unit=v['العملة'];fmt=lambda n:format(n.quantize(Decimal('.01'),rounding=ROUND_HALF_UP),',.2f')
  breakunits=(fixed/margin).to_integral_value(rounding=ROUND_CEILING)if margin>0 else None
  sections=[{'heading':'نوع التقرير والمصدر','paragraphs':['هذا نموذج مالي أولي لمنتج أو خدمة واحدة، بأرقام أدخلها المستخدم. ليس دراسة جدوى سوقية مكتملة، ولا توصية استثمار أو ضمان ربح. لا أسعار سوق أو مبيعات متحققة من مصادر خارجية.','اسم المشروع: '+v['اسم المشروع']+'؛ العملة: '+unit]},
  {'heading':'المدخلات كما أرسلها المستخدم','paragraphs':[k+': '+str(v[k])+(' '+unit if k in('سعر الوحدة','تكلفة الوحدة المتغيرة','التكلفة الثابتة الشهرية','الاستثمار الأولي')else'')for k in FEASIBILITY_FIELDS[2:]]},
  {'heading':'حسابات شهرية وليست توقعات سوقية','paragraphs':['الإيراد = السعر × الكمية = '+fmt(price*qty)+' '+unit,'التكلفة المتغيرة = تكلفة الوحدة × الكمية = '+fmt(cost*qty)+' '+unit,'هامش مساهمة الوحدة = السعر ناقص التكلفة المتغيرة = '+fmt(margin)+' '+unit,'فائض التشغيل قبل البنود المستبعدة = الهامش × الكمية ناقص الثابت = '+fmt(profit)+' '+unit,'وحدات التعادل بعد التقريب لأعلى: '+str(breakunits)if breakunits is not None else'التعادل غير ممكن بهامش مساهمة غير موجب.','استرداد بسيط = الاستثمار ÷ فائض التشغيل بالأشهر: '+fmt(initial/profit)if profit>0 else'لا يوجد استرداد بسيط بفائض موجب في هذا السيناريو.']},
  {'heading':'حساسية كمية افتراضية','paragraphs':['معامل '+str(factor)+' من الكمية، فائض التشغيل '+fmt(margin*qty*factor-fixed)+' '+unit for factor in [Decimal('.8'),Decimal('1'),Decimal('1.2')]]},
  {'heading':'بنود غير مشمولة وقرارات لازمة','paragraphs':['الحساب يفترض ثبات السعر والتكلفة والكمية، ولا يختبر الطلب أو المنافسة أو الطاقة الإنتاجية. الحساسية افتراض اختباري، لا توقع مبيعات.','لا يشمل ضريبة أو فوائد أو إهلاكاً أو رأس مال عاملاً أو موسمية. راتب المالك وأي مصروف غير مدرج لن يظهر. لا تكرر احتساب الاستثمار كمصروف تشغيل.','لا يفحص ترخيص النشاط أو اشتراطات الدولة والمدينة أو عقد الإيجار. يلزم مصدر محلي حديث لكل تكلفة وسعر وطلب قبل أي التزام.','للاستكمال: عروض موردين مؤرخة، شروط دفع وتحصيل، الطلب والمنافسون، التراخيص والضرائب، حدود التشغيل والمخاطر. راجع محاسباً ومتخصص سوق.']},
- {'heading':'ملف الحسابات','paragraphs':['ملف Excel المرفق يحتوي المدخلات والمعادلات والنتائج والحساسية والحدود. المعادلات تحسب عند الفتح في Excel أو LibreOffice، وقد لا تظهر الأرقام في معاينة Telegram. هذه النسخة النصية تستخدم نفس المدخلات وقت الإنشاء وليست مرتبطة بتعديلات Excel اللاحقة.']}]
+ {'heading':'ملف الحسابات','paragraphs':['ملف Excel المرفق يحتوي المدخلات والمعادلات والنتائج والحساسية والحدود. المعادلات تحسب عند الفتح في Excel أو LibreOffice، وقد لا تظهر الأرقام في معاينة Telegram. القيم النقدية المعروضة مقربة لمنزلتين، والحساب قبل التقريب. المدخلات تحتفظ بدقتها حتى6منازل. هذه النسخة النصية تستخدم نفس المدخلات وقت الإنشاء وليست مرتبطة بتعديلات Excel اللاحقة.']}]
  out=office_flow.word({'title':'نموذج مالي أولي: '+v['اسم المشروع'],'sections':sections})
  r=bot.tg('sendDocument',data={'chat_id':chat,'caption':'تقرير المدخلات والحسابات والحدود، لا دراسة سوق مكتملة.'},files={'document':('feasibility-report.docx',out,'application/vnd.openxmlformats-officedocument.wordprocessingml.document')})
  if not r.get('ok'):raise ValueError('اترسل Excel لكن تعذر تسليم تقرير Word. الأرقام لسه في الإدخال، جرّب تاني.')
