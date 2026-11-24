@@ -143,7 +143,7 @@ def build(chat,kind,source,request):
         r=requests.post('https://api.groq.com/openai/v1/chat/completions',headers={'Authorization':'Bearer '+os.environ.get('GROQ_API_KEY','')},json={'model':bot.GROQ_MODEL,'messages':[{'role':'system','content':system},{'role':'user','content':json.dumps({'request':request,'source':source[:18000]},ensure_ascii=False)}],'response_format':{'type':'json_object'},'temperature':0.1},timeout=35);r.raise_for_status();data=json.loads(r.json()['choices'][0]['message']['content'])
         stream=word(data) if kind=='word' else excel(data) if kind=='excel' else slides(G.parse_data(json.dumps(data),kind))
         name={'word':'document.docx','excel':'workbook.xlsx','slides':'presentation.pptx'}[kind]
-        result=bot.tg('sendDocument',data={'chat_id':chat,'caption':'ملف قابل للتعديل. راجع النص والأرقام قبل الاعتماد عليه.'},files={'document':(name,stream,'application/octet-stream')})
+        result=bot.tg('sendDocument',data={'chat_id':chat},files={'document':(name,stream,'application/octet-stream')})
         if not result.get('ok'):raise ValueError('send')
         print('office_file_sent',kind,flush=True)
     except Exception:
