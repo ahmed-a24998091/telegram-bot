@@ -9,6 +9,34 @@ import requests
 import urllib.parse
 import bot
 import intent_bundle
+"""Small conservative rules for news intent and numbered task boundaries."""
+import re
+NEWS=re.compile(r'(?:الأخبار|الاخبار|أخبار|اخبار|\bnews\b)',re.I)
+
+def strip_label(text):
+    return re.sub(r'^\s*(?:سؤال\s+(?:ذكاء|فهم)|المهمة\s+[\w]+)\s*[:：]\s*','',text).strip().strip('"“”«»')
+
+def split_tasks(text):
+    parts=re.split(r'(?:^|\n)\s*[0-9٠-٩]+\s*[.)،:-]\s*',text)
+    if len(parts)<3:return [text]
+    return [strip_label(p) for p in parts[1:] if p.strip()]
+
+def news_topic(text):
+    text=strip_label(text).strip()
+    if text.startswith('/news') and (len(text)==5 or text[5].isspace()):return text[5:].strip()
+    # Mentions, complaints, negation and quoted examples are not news requests.
+    if re.search(r'مش عايز|مش عاوز|لا (?:تبحث|تجيب|اريد|أريد)|ليه|لماذا|قلت|قال|رد[هك]?|اختبار|مثال|معنى|كلمة',text,re.I):return None
+    pattern=r'^(?:(?:ممكن|لو سمحت|من فضلك)\s+)?(?:(?:ابعت(?:لي|لى)?|هات(?:لي|لى)?|اعرض(?:لي|لى)?|عايز|عاوز|أريد|اريد|أعطني|اعطني|جيب(?:لي)?|قول(?:لي)?|ما هي|ايه|إيه)\s+)?(?:(?:آخر|اخر|أحدث|احدث)\s+)?(?:الأخبار|الاخبار|أخبار|اخبار|news)\b\s*(.*)$'
+    m=re.match(pattern,text,re.I)
+    if not m:return None
+    topic=m.group(1).strip(' ؟?،.');topic=re.sub(r'^(?:عن|في|فى)\s+','',topic)
+    topic=re.sub(r'\s*(?:النهارده|النهاردة|اليوم|دلوقتي)\s*$','',topic).strip()
+    if len(topic)>160:return None
+    return topic
+
+def chain_parts(text):
+    return re.split(r'\s*(?:وبعدين|و\s*بعدين|ثم|وبعدها|وبعد كده|\bthen\b)\s*',text,maxsplit=1,flags=re.I)
+
 
 ORIGINAL=bot.handle
 EXTRA=intent_bundle.office_bot.generate_bot.daily_bot.extra_bot
@@ -171,12 +199,12 @@ def handle(msg):
         except Exception:bot.send(chat,'مصدر الأسعار مش متاح دلوقتي. مش هخمن رقم. جرّب تاني بعد شوية.')
         print('prices_seconds',round(time.monotonic()-started,2),flush=True)
         return
-    if text.startswith('/news') or re.search(r'أخبار|اخبار|الاخبار|الأخبار',text):
-        topic=re.sub(r'^/news\s*','',text).strip() if text.startswith('/news') else text
-        topic=re.sub(r'(?:ممكن|هات|عايز|عاوز|احدث|أحدث|اخر|آخر|النهارده|النهاردة|اليوم|أخبار|اخبار|الأخبار|الاخبار)',' ',topic)
-        topic=re.sub(r'\s+',' ',topic).strip(' ؟?،.')
-        news_send(chat,headlines(topic))
-        return
+    topic=news_topic(text)
+    if topic is not None:
+        news_send(chat,headlines(topic));return
+    if NEWS.search(text):
+        # Do not let old nested handlers interpret quoted news or complaints as a search.
+        bot.send(chat,bot.answer(chat,text));return
     if text.startswith('/adhkar') or re.search(r'أذكار|اذكار',text):
         if not re.search(r'مساء|صباح|evening|morning',text,re.I):
             bot.send(chat,'عايز أذكار الصباح ولا المساء؟ ابعت /adhkar صباح أو /adhkar مساء.');return
