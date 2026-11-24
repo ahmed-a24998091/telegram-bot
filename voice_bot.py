@@ -66,17 +66,50 @@ def voice_request(text):
         return text if re.search(r'(?:ابعت|ارسل|أرسل|عايز|عاوز|قول|كلمني|رد|اقرا|اقرأ).*(?:صوت|فويس|تسجيل|ريكورد)|(?:voice|audio).*(?:send|reply|read)',text,re.I) else None
 
 
+ELEVEN_LOCK=threading.Lock()
+ELEVEN_BACKOFF_UNTIL=0.0
+ELEVEN_VOICE='JBFqnCBsd6RMkjVDRZzb'  # User-selected George, free premade voice.
+
+def eleven_audio(text):
+    import time
+    global ELEVEN_BACKOFF_UNTIL
+    key=os.environ.get('ELEVENLABS_API_KEY','')
+    if not key or time.monotonic()<ELEVEN_BACKOFF_UNTIL:return None
+    # Serialize balance-check plus generation to avoid concurrent quota races.
+    with ELEVEN_LOCK:
+        if time.monotonic()<ELEVEN_BACKOFF_UNTIL:return None
+        try:
+            headers={'xi-api-key':key}
+            usage=requests.get('https://api.elevenlabs.io/v1/user/subscription',headers=headers,timeout=8)
+            usage.raise_for_status();quota=usage.json()
+            remaining=int(quota.get('character_limit',0))-int(quota.get('character_count',0))
+            # Never enable billing/overage. Key also has a hard provider-side9900 cap.
+            if quota.get('tier')!='free' or quota.get('can_extend_character_limit') is not False or remaining<len(text)*2+100:
+                ELEVEN_BACKOFF_UNTIL=time.monotonic()+3600
+                print('eleven_free_quota_fallback',flush=True);return None
+            r=requests.post('https://api.elevenlabs.io/v1/text-to-speech/'+ELEVEN_VOICE,headers=headers,json={'text':text,'model_id':'eleven_v3'},timeout=30)
+            r.raise_for_status()
+            if not r.headers.get('Content-Type','').startswith('audio/') or not 100<len(r.content)<=12*1024*1024:raise ValueError('invalid audio')
+            print('eleven_free_voice_generated',flush=True)
+            return r.content
+        except Exception:
+            ELEVEN_BACKOFF_UNTIL=time.monotonic()+300
+            print('eleven_api_fallback',flush=True);return None
+
 def say(chat,text):
     import imageio_ffmpeg
-    key=os.environ.get('GROQ_API_KEY','')
-    if not key:raise ValueError('missing key')
-    r=requests.post('https://api.groq.com/openai/v1/audio/speech',headers={'Authorization':'Bearer '+key},json={'model':'canopylabs/orpheus-arabic-saudi','voice':'fahad','input':text,'response_format':'wav'},timeout=40)
-    r.raise_for_status()
-    if not r.content.startswith(b'RIFF') or len(r.content)>12*1024*1024:raise ValueError('invalid audio')
+    audio=eleven_audio(text)
+    if audio is None:
+        key=os.environ.get('GROQ_API_KEY','')
+        if not key:raise ValueError('missing key')
+        r=requests.post('https://api.groq.com/openai/v1/audio/speech',headers={'Authorization':'Bearer '+key},json={'model':'canopylabs/orpheus-arabic-saudi','voice':'fahad','input':text,'response_format':'wav'},timeout=40)
+        r.raise_for_status()
+        if not r.content.startswith(b'RIFF') or len(r.content)>12*1024*1024:raise ValueError('invalid audio')
+        audio=r.content
     with tempfile.TemporaryDirectory(prefix='voice-') as folder:
-        wav=os.path.join(folder,'voice.wav');ogg=os.path.join(folder,'voice.ogg')
-        with open(wav,'wb') as f:f.write(r.content)
-        subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(),'-y','-i',wav,'-c:a','libopus','-b:a','32k',ogg],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30,check=True)
+        source=os.path.join(folder,'voice.audio');ogg=os.path.join(folder,'voice.ogg')
+        with open(source,'wb') as f:f.write(audio)
+        subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(),'-y','-i',source,'-c:a','libopus','-b:a','32k',ogg],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30,check=True)
         with open(ogg,'rb') as f:result=bot.tg('sendVoice',data={'chat_id':chat},files={'voice':('voice.ogg',f,'audio/ogg')})
         if not result.get('ok'):raise ValueError('delivery')
 
