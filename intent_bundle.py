@@ -1,41 +1,56 @@
+# Local clock aliases generated from IANA zone.tab + Unicode CLDR (Babel).
+# Sources: https://www.iana.org/time-zones and https://cldr.unicode.org/index
+# No network geocoder or model is used for clock requests.
 import datetime as dt
 import re
+import unicodedata
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import requests
-
 DAYS=['الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد']
-
+def clock_normalize(value):
+    value=unicodedata.normalize('NFKC',value).casefold()
+    value=re.sub('[\u064b-\u065f\u0670\u0640]','',value)
+    value=value.translate(str.maketrans('أإآٱىة','اااايه'))
+    return re.sub(r'\s+',' ',value.replace('_',' ').strip(' ؟?،,.!'))
 
 def local_clock(place=''):
-    place=place.strip(' ؟?،.').strip()
-    # Country mappings below are only single-zone defaults, never multi-zone countries.
-    aliases={'السعودية':'Riyadh','السعوديه':'Riyadh','مصر':'Cairo','القاهرة':'Cairo','القاهره':'Cairo',
-             'الجيزة':'Giza','المنوفية':'Shibin El Kom','القليوبية':'Banha','الرياض':'Riyadh','جدة':'Jeddah','جده':'Jeddah','مكة':'Mecca','مكه':'Mecca',
-             'الإسكندرية':'Alexandria','الاسكندرية':'Alexandria','اسكندرية':'Alexandria'}
-    if not place:
-        zone='Africa/Cairo';label='القاهرة'
+    import os
+    if not place:zone='Africa/Cairo';label='القاهرة';note=''
     elif '/' in place:
         try:ZoneInfo(place)
-        except ZoneInfoNotFoundError:raise ValueError('اسم المنطقة الزمنية مش معروف. مثال: /time Asia/Riyadh أو /time London')
-        zone=place;label=place
+        except (ValueError,ZoneInfoNotFoundError):return 'اسم المنطقة الزمنية مش معروف. اكتب مدينة أو كود صحيح زي Asia/Riyadh.'
+        zone=place;label=place;note=''
     else:
-        if place in ('أمريكا','امريكا','الولايات المتحدة','روسيا','كندا','استراليا','أستراليا','البرازيل','المكسيك','الكونغو','إندونيسيا','اندونيسيا','البرتغال','إسبانيا','اسبانيا'):
-            return 'البلد دي فيها أكتر من توقيت. اكتب المدينة أو الإقليم، مثلاً /time New York'
-        search=aliases.get(place,place)
-        r=requests.get('https://geocoding-api.open-meteo.com/v1/search',params={'name':search,'count':5,'language':'ar','format':'json'},timeout=12)
-        r.raise_for_status();rows=r.json().get('results',[])
-        if place in ('مصر','القاهرة','القاهره','الإسكندرية','الاسكندرية','اسكندرية','الجيزة','المنوفية','القليوبية'):rows=[x for x in rows if x.get('country_code')=='EG']
-        if place in ('السعودية','السعوديه','الرياض','جدة','جده','مكة','مكه'):rows=[x for x in rows if x.get('country_code')=='SA']
-        if not rows:return 'مقدرتش أحدد المكان. ابعت اسم المدينة بالإنجليزي أو المنطقة الزمنية، مثلاً /time Asia/Riyadh'
-        zones={x.get('timezone') for x in rows}
-        # Different cities with the same timezone yield the same time, so are safe for a time-only question.
-        if len(zones)>1:
-            options='\n'.join(x.get('name','')+'، '+x.get('admin1','')+'، '+x.get('country','')+' ('+x.get('timezone','')+')' for x in rows)
-            return 'الاسم طلع بأكتر من توقيت. حدّد المدينة والبلد أو استخدم كود المنطقة:\n'+options
-        row=rows[0];zone=row.get('timezone');label=row['name']+'، '+row.get('country','')
-        if not zone:raise ValueError('مفيش منطقة زمنية مؤكدة للمكان ده.')
+        url=os.environ.get('CONVERTER_URL','').rstrip('/');key=os.environ.get('CONVERTER_KEY','')
+        response=requests.get(url+'/clock',params={'place':place},headers={'Authorization':'Bearer '+key},timeout=95);response.raise_for_status();data=response.json()
+        if data.get('error'):return data['error']
+        if data.get('choices'):return 'الاسم موجود بأكتر من توقيت. اكتب المدينة ومعاها البلد (مثلاً Queenstown, New Zealand):\n'+'\n'.join(x['name']+'، '+x['cc']+' | '+x['tz']for x in data['choices'])
+        zone=data['tz'];label=data['name']+'، '+data['cc'];note=data.get('note','')+'\nالمصدر: GeoNames CC BY4.0، نسخة2026-11-24، + قواعد IANA. مش ضمان لكل مكان أو تهجئة.'
     now=dt.datetime.now(ZoneInfo(zone));suffix='صباحاً' if now.hour<12 else 'مساءً'
-    return f'{label}\n{DAYS[now.weekday()]} {now:%Y-%m-%d}\n{now:%I:%M:%S} {suffix}\nالمنطقة الزمنية: {zone}\nمحسوب من ساعة الخادم وقواعد التوقيت الصيفي، مش تخمين من نموذج.'
+    return f'{label}\n{DAYS[now.weekday()]} {now:%Y-%m-%d}\n{now:%I:%M:%S} {suffix}\nالمنطقة الزمنية: {zone}\n{note}'.strip()
+
+CLOCK_CONTEXT={}
+
+def clock_request(text,chat,reply,now):
+    text=text.strip()
+    if re.match(r'^/time(?:\s|$)',text,re.I):return text[5:].strip()
+    norm=clock_normalize(text)
+    explicit=bool(re.search(r'(?:الساعه|التوقيت|توقيت|الوقت|clock|time)',norm))
+    # Elliptical follow-ups are scoped to ten minutes in the same chat.
+    recent=0<=now-CLOCK_CONTEXT.get(chat,-100000)<600
+    replied=bool(re.search(r'المنطقة الزمنية: [A-Za-z_]+/',reply or ''))
+    follow=bool(re.match(r'^(?:(?:طيب|طب|و)\s*)?(?:وفي|وفى|في|فى|in|and)\s+',norm))
+    if not explicit and not ((recent or replied) and follow):return None
+    # Reject discussion, reminders and unrelated text mentioning time.
+    if explicit and not (re.search(r'بتوقيت|توقيت\s+|^(?:طيب\s+|طب\s+)?(?:الساعه|التوقيت|الوقت)(?:\s|$)|^(?:كام|كم|what|current|time|clock)\b|(?:الساعه|الوقت)\s*(?:كام|ايه|الان|دلوقتي)',norm)):return None
+    match=re.search(r'(?:بتوقيت|توقيت|وفي|وفى|في|فى|\bin)\s+(.+)',text,re.I)
+    if match:
+        place=match.group(1).strip(' ؟?،,.!')
+        place=re.sub(r'\s+(?:الساعة|الساعه|كام|دلوقتي|الآن|الان|now).*$','',place,flags=re.I).strip()
+        return place
+    if re.search(r'بتوقيت|توقيت\s+',norm):return ''
+    if re.match(r'^(?:time|clock)\s+',text,re.I):return re.sub(r'^(?:time|clock)\s+','',text,flags=re.I)
+    return ''
 
 import datetime as dt
 import re
@@ -161,15 +176,11 @@ def handle(msg):
         CLARIFY_COUNT[chat]=CLARIFY_COUNT.get(chat,0)+1
         questions=['عايزني أعمل إيه في الصورة: أقرأ النص، أترجمه، ولا حاجة تانية؟','محتاج تقرأ الكلام اللي في الصورة ولا تترجمه؟ قولّي المطلوب.','تقصد أطلع النص من الصورة؟ ولو عايز ترجمته قولّي اللغة.']
         bot.send(chat,questions[(CLARIFY_COUNT[chat]-1)%len(questions)]);return
-    is_time=text.startswith('/time') or re.search(r'(?:بتوقيت|توقيت)\s+\S+',text) or re.search(r'(?:الساعة|الساعه|التوقيت|توقيت).*(?:كام|إيه|ايه|الآن|دلوقتي)|(?:كام|ايه|إيه).*(?:الساعة|الساعه)',text)
-    if is_time:
-        place=''
-        if text.startswith('/time'):place=text[5:].strip()
-        else:
-            match=re.search(r'(?:بتوقيت|توقيت|في|فى)\s+(.+?)(?:\s+(?:الساعة|الساعه|كام|دلوقتي|الآن).*)?[؟?]?$' ,text)
-            if match:place=match.group(1).strip(' ؟?')
+    place=clock_request(text,chat,reply.get('text','') if reply.get('from',{}).get('is_bot') else '',now)
+    if place is not None:
+        CLOCK_CONTEXT[chat]=now
         try:bot.send(chat,local_clock(place))
-        except Exception:bot.send(chat,'مقدرتش أتحقق من توقيت المكان. ابعت اسم المدينة أو كود المنطقة الزمنية، مثلاً /time Asia/Riyadh. مش هخمن.');
+        except Exception:bot.send(chat,'قواعد توقيت المكان مش متاحة دلوقتي. جرّب كود منطقة صحيح، مش هخمن.')
         return
     return ORIGINAL(msg)
 
