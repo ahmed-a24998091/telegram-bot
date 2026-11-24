@@ -22,7 +22,8 @@ def local_clock(place=''):
         zone=place;label=place;note=''
     else:
         url=os.environ.get('CONVERTER_URL','').rstrip('/');key=os.environ.get('CONVERTER_KEY','')
-        response=requests.get(url+'/clock',params={'place':place},headers={'Authorization':'Bearer '+key},timeout=95);response.raise_for_status();data=response.json()
+        lookup_place={'tokyo':'Tokyo, Japan','طوكيو':'Tokyo, Japan','manaus':'Manaus, Brazil','القاهره':'Cairo, Egypt','جده':'Jeddah, Saudi Arabia','الرياض':'Riyadh, Saudi Arabia'}.get(clock_normalize(place),place)
+        response=requests.get(url+'/clock',params={'place':lookup_place},headers={'Authorization':'Bearer '+key},timeout=95);response.raise_for_status();data=response.json()
         if data.get('error'):return data['error']
         if data.get('choices'):return 'الاسم موجود بأكتر من توقيت. اكتب المدينة ومعاها البلد (مثلاً Queenstown, New Zealand):\n'+'\n'.join(x['name']+'، '+x['cc']+' | '+x['tz']for x in data['choices'])
         zone=data['tz'];label=data['name']+'، '+data['cc'];note=data.get('note','')+'\nالمصدر: GeoNames CC BY4.0، نسخة2026-11-24، + قواعد IANA. مش ضمان لكل مكان أو تهجئة.'
