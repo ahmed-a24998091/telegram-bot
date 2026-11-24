@@ -11,6 +11,39 @@ import bot
 import conversion_bot
 import office_flow
 
+import finish_bot
+from finish_bot import split_tasks,news_topic,chain_parts,NEWS
+TASK_ORIGINAL=bot.handle
+
+def task_handle(msg):
+    if msg['chat'].get('type')!='private' or not msg.get('text'):return TASK_ORIGINAL(msg)
+    text=msg['text'].strip();chat=msg['chat']['id'];tasks=split_tasks(text)
+    if len(tasks)>1:
+        if len(tasks)>4:
+            bot.send(chat,'أقدر أتابع لحد ٤ مهام في الرسالة. ابعتهم على دفعات.');return
+        for i,part in enumerate(tasks,1):
+            bot.send(chat,'المهمة '+str(i)+':')
+            try:task_handle(dict(msg,text=part))
+            except Exception:bot.send(chat,'المهمة دي متمتش. ابعتها لوحدها علشان أحاول تاني.')
+        return
+    chain=chain_parts(text)
+    topic=news_topic(chain[0])
+    if len(chain)==2 and topic is not None:
+        content=finish_bot.headlines(topic)
+        finish_bot.news_send(chat,content)
+        # Only format the actual retrieved result, never let the model invent fresh news.
+        kind=office_flow.kind_of(chain[1])
+        if kind:return office_flow.build(chat,kind,content,chain[1])
+        bot.send(chat,'خلصت الأخبار. ابعت الطلب اللي بعدها في رسالة لوحده.');return
+    if len(chain)==2 and NEWS.search(text) and not office_flow.kind_of(chain[0]):
+        task_handle(dict(msg,text=chain[0]))
+        bot.send(chat,'نفذت الجزء الأول. ابعت الجزء اللي بعده في رسالة لوحده.');return
+    if topic is not None and not office_flow.kind_of(text):
+        finish_bot.news_send(chat,finish_bot.headlines(topic));return
+    return TASK_ORIGINAL(msg)
+
+bot.handle=task_handle
+
 ORIGINAL=bot.handle
 LOCK=threading.BoundedSemaphore(2)
 
