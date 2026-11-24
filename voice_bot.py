@@ -820,7 +820,7 @@ def voice_intent_handle(msg):
   # Transport types are removed so the exact same typed request passes the full context chain once.
   typed={k:v for k,v in msg.items()if k not in('voice','audio','document','caption')};typed['text']=text
   bot.send(chat,'فهمت من صوتك: '+re.sub(r'\s+',' ',text)[:450])
-  return VOICE_INPUT_BASE(typed)
+  return bot.handle(typed)
 bot.handle=voice_intent_handle
 # Current help is intercepted outside its prior wording, so it matches deployed voice behavior.
 VOICE_HELP_BASE=bot.handle
@@ -830,6 +830,145 @@ def voice_current_help(msg):
   bot.send(msg['chat']['id'],'افتح /menu لكل الأقسام. صورة أو ملف بلا طلب: أسألك تختار، وأتذكره ساعة. اكتب كبرها أو شيل الخلفية بعدها أو رد عليها. Word للصورة يحفظ شكلها كصورة، مش تخطيطاً قابلاً للتحرير بالكامل.\nالتسجيل الصوتي: أقول باختصار فهمت إيه، ثم أنفذ بنفس قواعد الطلب المكتوب والسياق. راجع سطر الفهم، التفريغ قد يخطئ. تسجيل غير واضح لن ينفذ بالتخمين. /voice لرد صوتي.\n/studynew دراسة من نص أو PDF نصي/DOCX/PPTX/XLSX.\n/weather المدينة، /prayer المدينة، /time المدينة، وفي لندن؟ لمتابعة نفس الطلب، والصلاة؟ أو والطقس؟ لنفس آخر مكان خلال عشر دقائق.\nرد على النص بلخصه أو اشرحه، أو لآخر رد خلال عشر دقائق.\n/wiki و/papers و/imagesearch و/research مصادر محدودة وليست بحث Google أو قراءة أوراق كاملة.\n/forget يمسح المحفوظ والمراجع المؤقتة، مش رسائل Telegram. التنبيهات تحتاج إعداداً وتأكيداً، والاستضافة المجانية قد تتأخر.');return
  return VOICE_HELP_BASE(msg)
 bot.handle=voice_current_help
+
+
+# Text review, NOT an AI detector. Every finding is tied to exact supplied text.
+REVIEW_STATE={};REVIEW_LOCK=threading.BoundedSemaphore(1)
+
+def review_doi(doi):
+ global CROSSREF_NEXT
+ from urllib.parse import quote
+ with CROSSREF_LOCK:
+  if time.monotonic()<CROSSREF_NEXT:time.sleep(CROSSREF_NEXT-time.monotonic())
+  try:
+   d=api_get('https://api.crossref.org/works/'+quote(doi,safe=''),{}).get('message',{})
+   if d.get('DOI','').lower()!=doi.lower():return {'doi':doi,'status':'تعذر تطابق المعرف، لا حكم على المرجع'}
+   return {'doi':doi,'status':'سجل DOI موجود في Crossref، لا تحقق من النتيجة أو دعم الادعاء','title':clean_html(' '.join(d.get('title',[]))),'year':str((d.get('published',{}).get('date-parts')or[['غير متاح']])[0][0]),'url':d.get('URL','')}
+  except requests.HTTPError as e:
+   return {'doi':doi,'status':'لم يوجد سجل لدى Crossref وقت الفحص، قد يكون المعرف خطأ أو لدى جهة أخرى. لا يثبت تزويراً'if e.response is not None and e.response.status_code==404 else'خدمة Crossref لم تسمح بالتحقق الآن'}
+  except Exception:return {'doi':doi,'status':'تعذر التحقق تقنياً، ليس حكماً على وجود المرجع'}
+  finally:CROSSREF_NEXT=time.monotonic()+1.1
+
+def review_analyze(text,source,comparison=None):
+ import datetime as dt
+ from collections import Counter
+ stamp=dt.datetime.now(__import__('zoneinfo').ZoneInfo('Africa/Cairo')).isoformat(timespec='minutes')
+ paragraphs=[p.strip()for p in re.split(r'\n+',text)if p.strip()]
+ words=re.findall(r'\w+',text,re.UNICODE);sentences=[s.strip()for s in re.split(r'[.!؟?\n]+',text)if len(s.strip())>=35]
+ out=['تقرير مراجعة النص والمراجع','وقت الإعداد: '+stamp+' القاهرة','المصدر: '+source,'طبيعة التقرير وحدوده','هذا ليس كاشفاً للذكاء الاصطناعي، ولا يحدد من كتب النص أو كيف كُتب. لا نسبة احتمال ولا دقة ولا حكم أصالة أو اتهام. النص البشري والمولد قد يشتركان في هذه السمات. التقرير قائمة مراجعة تحريرية وبحثية، لا يستخدم وحده لاتخاذ قرار ضد طالب أو باحث.','نطاق القراءة','عدد الكلمات التقريبي: '+str(len(words))+'؛ فقرات نصية مستخرجة: '+str(len(paragraphs))+'. الصور والرسوم لم تقرأ. Word لا يوفر علامات صفحات موثوقة؛ علامات PDF/الشرائح إن وجدت تبقى في النص.','مقاطع تحتاج مراجعة بشرية']
+ findings=[]
+ seen=Counter(re.sub(r'\s+',' ',s)for s in sentences)
+ for s,count in seen.items():
+  if count>1:findings.append(('تكرار نصي داخلي','تكرر هذا المقطع '+str(count)+' مرات. قد يكون تكراراً مقصوداً أو من الاستخراج أو تحريراً يحتاج تحسيناً، وليس دليلاً على استخدام AI.',s))
+ # Values and quotations are check candidates, never described as false without a source.
+ for p in paragraphs:
+  if re.search(r'\d(?:[\d.,٬٫]*\d)?\s*(?:%|٪|بالمائة|في المائة)|[٠-٩]+\s*(?:%|٪)',p):findings.append(('رقم أو نسبة تحتاج سنداً','تحقق من المجتمع والفترة والمقام وطريقة الحساب ومصدر الرقم. لم أفحص بياناته الأصلية ولا أصفه بالمختلق.',p))
+  if re.search(r'«[^»]{15,}»|“[^”]{15,}”|"[^"\n]{15,}"',p):findings.append(('اقتباس يحتاج مطابقة بالأصل','وجود علامات اقتباس لا يثبت النقل الحرفي. راجع المؤلف والصفحة والطبعة والسياق. لم أقرأ أصل الاقتباس.',p))
+  if re.search(r'أثبتت الدراسات|اثبتت الدراسات|تشير الدراسات|أجمع العلماء|اجمع العلماء|أثبت علميا|proven by studies|studies show',p,re.I):findings.append(('عبارة إحالة عامة','هذه عبارة إحالة عامة، يلزم ربطها بدراسة محددة وقراءة منهجها. قد توجد إحالة في مكان آخر من الملف. ليست إشارة موثوقة لهوية الكاتب.',p))
+ if not findings:out.append('لم تلتقط القواعد المحدودة مقاطع من الأنواع المحددة. هذا لا يعني خلو النص من الأخطاء أو إثباتاً أنه بشري أو آلي.')
+ for i,(label,reason,p)in enumerate(findings[:16],1):out.extend([str(i)+'. '+label,'المقطع الحرفي: '+p[:1000]+(' [عرض مقتطف، المقطع أطول]'if len(p)>1000 else''),'سبب المراجعة: '+reason])
+ if len(findings)>16:out.append('عدد المقاطع المرشحة أكبر؛ عرض أول16مقطعاً. ليست مراجعة شاملة لكل عبارة.')
+ dois=[]
+ for value in re.findall(r'10\.\d{4,9}/[^\s<>"«»]+',text,re.I):
+  value=value.rstrip('.,;،؛)\]')
+  if value not in dois:dois.append(value)
+ out.append('فحص وجود المراجع')
+ if not dois:out.append('لم أجد DOI صريحاً في النص. المراجع بأسماء أو عناوين فقط لم يتم التحقق منها. غياب DOI ليس دليلاً على عدم وجود المرجع.')
+ for doi in dois[:5]:
+  row=review_doi(doi);out.extend(['DOI: '+doi,row['status']])
+  if row.get('title'):out.extend(['عنوان سجل الناشر: '+row['title'],'السنة في السجل: '+row['year']])
+  if row.get('url','').startswith('https://doi.org/'):out.append(row['url'])
+ if len(dois)>5:out.append('تم فحص أول5معرفات فقط من '+str(len(dois))+'. الباقي غير متحقق، قسم المراجع لفحصها.')
+ out.extend(['مطابقة النص مع مصادر أخرى','لم يتم إجراء بحث تشابه على الويب أو قواعد الأبحاث المغلقة. لا درجة انتحال أو نسبة أصالة. Crossref بيانات مراجع، ليس فحص نسخ أو قراءة ورقة كاملة.'])
+ if comparison:
+  a=[' '.join(words[i:i+8]).casefold()for i in range(max(0,len(words)-7))];bwords=re.findall(r'\w+',comparison,re.UNICODE);b=set(' '.join(bwords[i:i+8]).casefold()for i in range(max(0,len(bwords)-7)));matches=list(dict.fromkeys(x for x in a if x in b))
+  out.extend(['مقارنة محدودة مع نص ثان قدمه المستخدم','مطابقة حرفية بعد توحيد حالة الحروف لسلاسل8كلمات، لا تبحث في الإنترنت ولا تكشف إعادة الصياغة. قد تكون لغة مشتركة أو اقتباساً مشروعاً، لا حكم انتحال.'])
+  if matches:
+   for line in matches[:8]:out.append('تطابق لفظي مع النص المقارن: '+line)
+   if len(matches)>8:out.append('عرض أول8سلاسل متداخلة فقط، لا تحسب كنسبة مستقلة.')
+  else:out.append('لم توجد سلسلة8كلمات مطابقة بهذه القاعدة. لا يثبت أصالة النص.')
+ out.extend(['الخطوة التالية','اطلب مسودات وملاحظات الباحث ومصادره، وناقش المنهج والبيانات معه بعدل. تحقق من الاقتباسات والأرقام عند ناشرها، ولا تستخدم الأسلوب اللغوي لاتهام أحد.','مصادر الفحص وحدوده','نص المستخدم هو مصدر المقاطع المعروضة. Crossref REST API عند وجود DOI، وقت الفحص أعلاه. https://api.crossref.org/ . لم تستخدم خدمة مدفوعة أو كاشف AI أو قاعدة انتحال.'])
+ return '\n\n'.join(out)
+
+def review_export(chat,state,kind):
+ if not state.get('report'):bot.send(chat,'ابدأ /reviewnew وابعت النص أو الملف الأول.');return
+ paragraphs=state['report'].split('\n\n');sections=[]
+ for i in range(0,len(paragraphs),8):sections.append({'heading':'المراجعة'if i==0 else'تابع المراجعة','paragraphs':paragraphs[i:i+8]})
+ out=office_flow.word({'title':'تقرير مراجعة النص والمراجع','sections':sections});name='text-review.docx';mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+ if kind=='pdf':
+  r=requests.post(os.environ['CONVERTER_URL'].rstrip('/')+'/convert',data=out.getvalue(),headers={'Authorization':'Bearer '+os.environ['CONVERTER_KEY'],'X-Format':'docx','X-Target':'pdf'},timeout=95);r.raise_for_status()
+  if not r.content.startswith(b'%PDF'):raise ValueError('PDF unavailable')
+  out=io.BytesIO(r.content);name='text-review.pdf';mime='application/pdf'
+ r=bot.tg('sendDocument',data={'chat_id':chat,'caption':'تقرير مراجعة محدود، لا يكشف هوية الكاتب ولا يثبت استخدام AI أو الانتحال. اقرأ الحدود داخل الملف.'},files={'document':(name,out,mime)})
+ if not r.get('ok'):raise ValueError('send')
+
+def review_request(msg):
+ chat=msg['chat']['id'];text=(msg.get('text')or'').strip();state=REVIEW_STATE.get(chat,{})
+ if text in('/forget','/reset'):REVIEW_STATE.pop(chat,None);return False
+ if time.monotonic()-state.get('time',0)>3600:REVIEW_STATE.pop(chat,None);state={}
+ if text in('/reviewnew','/menu_task reviewnew'):
+  REVIEW_STATE[chat]={'awaiting':True,'time':time.monotonic()};bot.send(chat,'ابعت النص أو PDF نصي/DOCX/PPTX/XLSX أقل من٨ميجابايت وحتى٢٤ألف حرف. سأراجع مقاطع وأرقاماً واقتباسات ووجود أول٥معرفات DOI، لا أستطيع تحديد أن الكاتب استخدم AI ولا أعطي نسبة. فحص DOI يرسل المعرفات فقط إلى Crossref. الصور لا تقرأ هنا. /cancel للإلغاء.');return True
+ if text=='/cancel'and state:REVIEW_STATE.pop(chat,None);bot.send(chat,'اتلغت جلسة مراجعة النص.');return True
+ if text.startswith('/reviewexport '):
+  kind=text.split()[-1]
+  if kind not in('word','pdf'):return True
+  try:review_export(chat,state,kind)
+  except Exception:bot.send(chat,'تعذر تجهيز أو تسليم التقرير. النص محفوظ في الجلسة ساعة، جرّب تاني.')
+  return True
+ compare=text.startswith('/reviewcompare ')
+ if compare and not state.get('text'):bot.send(chat,'اعمل مراجعة للنص الأول ثم ابعت /reviewcompare وبعدها نص المقارنة.');return True
+ if state.get('awaiting')and not text.startswith('/')or compare:
+  if not REVIEW_LOCK.acquire(False):bot.send(chat,'فيه مراجعة شغالة، جرّب بعد دقيقة.');return True
+  try:
+   if compare:
+    other=text[len('/reviewcompare '):]
+    if not 35<=len(other)<=24000:raise ValueError('نص المقارنة من٣٥حتى٢٤ألف حرف.')
+    report=review_analyze(state['text'],state['source'],other)
+   else:
+    value,name=study_load(msg);report=review_analyze(value,name);state={'text':value,'source':name}
+   state.update(report=report,time=time.monotonic(),awaiting=False);REVIEW_STATE[chat]=state
+   if len(REVIEW_STATE)>80:REVIEW_STATE.pop(min(REVIEW_STATE,key=lambda k:REVIEW_STATE[k].get('time',0)),None)
+   bot.send(chat,'اتجهز تقرير مراجعة النص، ليس كشف AI أو حكم انتحال. اختار Word أو PDF. لم أستخدم كاشفاً أو نسبة دقة. للمقارنة مع نص آخر قدمته أنت: /reviewcompare ثم النص.')
+   bot.tg('sendMessage',data={'chat_id':chat,'text':'تصدير التقرير الكامل وحدوده','reply_markup':json.dumps({'inline_keyboard':[[{'text':'تقرير Word','callback_data':'review:word'},{'text':'تقرير PDF','callback_data':'review:pdf'}]]},ensure_ascii=False)})
+  except ValueError as e:bot.send(chat,str(e))
+  except Exception:bot.send(chat,'تعذرت مراجعة النص. ابعت نصاً واضحاً أو ملفاً نصياً مدعوماً، لا أستنتج نتيجة من فشل القراءة.')
+  finally:REVIEW_LOCK.release()
+  return True
+ return False
+REVIEW_TG=bot.tg
+def review_tg(method,**kw):
+ result=REVIEW_TG(method,**kw)
+ if method=='getUpdates':
+  for u in result.get('result',[]):
+   cb=u.get('callback_query',{});msg=cb.get('message',{});actor=cb.get('from',{});value=cb.get('data','')
+   if value not in('review:word','review:pdf')or msg.get('chat',{}).get('type')!='private'or actor.get('id')!=msg.get('chat',{}).get('id'):continue
+   REVIEW_TG('answerCallbackQuery',data={'callback_query_id':cb['id']});u['message']={'chat':msg['chat'],'from':actor,'text':'/reviewexport '+value.split(':')[1],'message_id':msg['message_id'],'date':msg.get('date',0)}
+ return result
+bot.tg=review_tg
+REVIEW_BASE=bot.handle
+
+def review_handle(msg):
+ if msg.get('chat',{}).get('type')=='private'and review_request(msg):return
+ return REVIEW_BASE(msg)
+bot.handle=review_handle
+MENU_SECTIONS['academic'][1].append(('تقرير مراجعة النص والمراجع','task:reviewnew'))
+MENU_TASKS['reviewnew']='ابعت /reviewnew ثم النص أو الملف. تقرير مؤشرات تحريرية وبحثية، لا كاشف AI أو اتهام أو درجة أصالة.'
+
+
+# Remove the keyboard from a used prompt, preserving its text. New prompts get their own controls.
+DISMISS_BUTTONS_TG=bot.tg
+
+def dismiss_used_keyboard_tg(method,**kw):
+ result=DISMISS_BUTTONS_TG(method,**kw)
+ if method=='getUpdates':
+  for update in result.get('result',[]):
+   cb=update.get('callback_query',{});message=cb.get('message',{});actor=cb.get('from',{});chat=message.get('chat',{})
+   if not update.get('message')or chat.get('type')!='private'or actor.get('id')!=chat.get('id'):continue
+   if not cb.get('data','').startswith(('menu:','study:','file:','review:')):continue
+   try:DISMISS_BUTTONS_TG('editMessageReplyMarkup',data={'chat_id':chat['id'],'message_id':message['message_id'],'reply_markup':json.dumps({'inline_keyboard':[]})})
+   except Exception:print('used_keyboard_cleanup_failed',flush=True)
+ return result
+bot.tg=dismiss_used_keyboard_tg
 
 if __name__=='__main__':
     initialize_menu()
