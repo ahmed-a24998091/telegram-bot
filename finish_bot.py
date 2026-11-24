@@ -238,6 +238,11 @@ def adhkar(evening=False):
 
 def handle(msg):
     text=(msg.get('text') or '').strip();chat=msg['chat']['id']
+    fx=currency_request(text)
+    if fx is not None:
+        try:bot.send(chat,currency_convert(*fx))
+        except Exception:bot.send(chat,'مصدر تحويل العملات مش متاح أو بياناته قديمة. جرّب بعدين، مش هخمن سعر.')
+        return
     if text.startswith('/football') or re.search(r'(?:مواعيد|نتايج|نتائج|ماتشات|مباريات).*(?:ماتش|مبار|كوره|كورة|كره|كرة)|^(?:ماتشات|مباريات)(?: النهارده| اليوم)?$',text):
         try:bot.send(chat,football(text))
         except Exception:bot.send(chat,'مصدر الماتشات مش متاح دلوقتي، مش هخمن نتايج.')
@@ -366,3 +371,35 @@ def football(text=''):
         except Exception:rows.append(leagues[league][0]+': المصدر غير متاح دلوقتي.')
     rows.append('المصدر: https://www.espn.com/soccer/scoreboard')
     out='\n\n'.join(rows);CACHE[key]=(time.monotonic(),out);return out
+
+
+FX_CACHE={}
+def currency_request(text):
+    text=text.translate(str.maketrans('٠١٢٣٤٥٦٧٨٩٫','0123456789.')).strip()
+    if text.startswith('/fx'):
+        m=re.fullmatch(r'/fx\s+(\d+(?:\.\d+)?)\s+([A-Za-z]{3})\s+([A-Za-z]{3})',text)
+        return m.groups() if m else ('','','')
+    alias={'دولار':'USD','يورو':'EUR','جنيه':'EGP','جنية':'EGP','جنيه مصري':'EGP','ريال سعودي':'SAR','درهم اماراتي':'AED','درهم إماراتي':'AED','استرليني':'GBP','إسترليني':'GBP'}
+    m=re.fullmatch(r'(?:حول|حوّل|تحويل)\s+(\d+(?:\.\d+)?)\s+(.+?)\s+(?:إلى|الى|ل|to)\s*(.+?)[؟?]?',text,re.I)
+    if not m:return None
+    amount,a,b=m.groups();a=alias.get(a,a.upper());b=alias.get(b,b.upper())
+    if re.fullmatch('[A-Z]{3}',a) and re.fullmatch('[A-Z]{3}',b):return amount,a,b
+    return None
+
+def currency_convert(amount,source,target):
+    from decimal import Decimal,localcontext
+    if not amount:return 'اكتب /fx 100 USD EGP أو حول 100 دولار إلى جنيه. أسعار مرجعية يومية، مش عرض بيع وشراء.'
+    source=source.upper();target=target.upper();value=Decimal(amount)
+    if not value.is_finite()or value<0 or value>Decimal('1000000000000'):return 'استخدم مبلغ موجب أقل من تريليون.'
+    if not re.fullmatch('[A-Z]{3}',source)or not re.fullmatch('[A-Z]{3}',target):return 'استخدم كود العملة من3حروف، مثلاً USD EGP SAR EUR.'
+    if source not in FX_CACHE or time.monotonic()-FX_CACHE[source][0]>3600:
+        r=requests.get('https://open.er-api.com/v6/latest/'+source,timeout=12);r.raise_for_status();data=r.json()
+        if data.get('result')!='success'or data.get('base_code')!=source:raise ValueError('source')
+        FX_CACHE[source]=(time.monotonic(),data)
+    data=FX_CACHE[source][1];updated=dt.datetime.fromtimestamp(int(data['time_last_update_unix']),TZ);now=dt.datetime.now(TZ)
+    if updated>now or now-updated>dt.timedelta(hours=48):raise ValueError('stale')
+    rate=Decimal(str(data['rates'].get(target,'NaN')))
+    if not rate.is_finite()or rate<=0:return 'كود العملة غير مدعوم من المصدر. استخدم ISO مثل USD وEGP.'
+    with localcontext() as ctx:
+        ctx.prec=32;result=value*rate
+    return f'{value:,.2f} {source} ≈ {result:,.2f} {target}\nسعر مرجعي: 1 {source} = {rate} {target}\nوقت بيانات المصدر: {updated:%Y-%m-%d %H:%M} القاهرة\nتحديث يومي تقريبي، مش سعر بنك بيع أو شراء ولا شامل رسوم. لا ينفّذ تحويل أموال.\nالمصدر: https://www.exchangerate-api.com/'
