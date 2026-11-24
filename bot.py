@@ -34,7 +34,7 @@ def tg(method, **kw):
     try:
         data = r.json()
         if method in ("sendMessage", "sendPhoto"):
-            print("telegram_delivery", method, "ok", data.get("ok"), "message_id", data.get("result", {}).get("message_id"), flush=True)
+            print("telegram_delivery", method, "ok", bool(data.get("ok")), flush=True)
         return data
     except Exception:
         return {}
@@ -58,7 +58,7 @@ def ask_gemini(msgs):
             r = requests.post(url, json=body, headers={"x-goog-api-key": GEMINI_KEY}, timeout=12)
         except Exception as e:
             last = e
-            print("gemini timeout", model)
+            print("gemini_timeout", flush=True)
             continue
         if r.status_code == 200:
             try:
@@ -67,7 +67,7 @@ def ask_gemini(msgs):
                 last = e
                 continue
         last = RuntimeError("gemini %s %s" % (model, r.status_code))
-        print(last)
+        print("gemini_response_failed", flush=True)
     raise last
 
 
@@ -102,12 +102,12 @@ def answer(chat_id, text):
     for p in providers:
         try:
             out = p(h)
-            print("reply by", p.__name__, "|", out[:60].replace("\n", " "), flush=True)
+            print("reply_ready", p.__name__, flush=True)
             if out:
                 h.append({"role": "model", "text": out})
                 return out
         except Exception as e:
-            print("provider failed:", p.__name__, e)
+            print("provider_failed", p.__name__, flush=True)
     h.pop()
     return "معلش، الخدمة مشغولة دلوقتي. جرب تاني بعد دقيقة."
 
@@ -124,7 +124,7 @@ def to_english_prompt(text):
             if r.status_code == 200:
                 return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
         except Exception as e:
-            print("translate failed", e)
+            print("translate_failed", flush=True)
     return text
 
 
@@ -164,7 +164,7 @@ def make_image(chat_id, text):
             data = fn(prompt)
             break
         except Exception as e:
-            print("image provider failed:", fn.__name__, e)
+            print("image_provider_failed", fn.__name__, flush=True)
     if not data:
         send(chat_id, "معلش، مقدرتش أعمل الصورة دلوقتي. جرب تاني بعد شوية.")
         return
@@ -386,7 +386,7 @@ def safe_handle(msg):
         with chat_locks.setdefault(msg["chat"]["id"], threading.Lock()):
             handle(msg)
     except Exception as e:
-        print("error:", e)
+        print("handler_failed", flush=True)
 
 
 class Ping(BaseHTTPRequestHandler):
@@ -416,10 +416,10 @@ def main():
             for u in r.get("result", []):
                 offset = u["update_id"] + 1
                 if "message" in u:
-                    print("got message", u["message"]["chat"]["id"], (u["message"].get("text") or "")[:40], flush=True)
+                    print("message_received", flush=True)
                     threading.Thread(target=safe_handle, args=(u["message"],), daemon=True).start()
         except Exception as e:
-            print("loop error:", e)
+            print("poll_loop_failed", flush=True)
             time.sleep(5)
 
 
