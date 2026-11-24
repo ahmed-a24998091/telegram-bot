@@ -102,18 +102,17 @@ def price_request(text):
 
 
 def news_send(chat,text):
-    # Use text-link entities, not raw encoded Google News story URLs.
-    entities=[];parts=[];pos=0
-    for m in re.finditer(r'https://news\.google\.com/[^\s]+',text):
-        parts.append(text[pos:m.start()]);parts.append('اقرأ الخبر')
-        prefix=''.join(parts[:-1]);entities.append({'type':'text_link','offset':len(prefix.encode('utf-16-le'))//2,'length':len('اقرأ الخبر'),'url':m.group()})
-        pos=m.end()
-    if not entities:return bot.send(chat,text)
-    parts.append(text[pos:]);out=''.join(parts)
-    if len(out)>3900:out=out[:3900];entities=[e for e in entities if e['offset']+e['length']<=len(out.encode('utf-16-le'))//2]
-    result=bot.tg('sendMessage',data={'chat_id':chat,'text':out,'entities':__import__('json').dumps(entities),'disable_web_page_preview':True})
-    if not result.get('ok'):bot.send(chat,re.sub(r'https://news\.google\.com/[^\s]+','المصدر: Google News',text))
-
+    # Each story is kept intact and uses native Telegram links, including non-Google sources.
+    for block in re.split(r'\n\n',text):
+        parts=[];entities=[];pos=0
+        for m in re.finditer(r'https?://[^\s]+',block):
+            parts.append(block[pos:m.start()]);prefix=''.join(parts)
+            entities.append({'type':'text_link','offset':len(prefix.encode('utf-16-le'))//2,'length':len('اقرأ الخبر'),'url':m.group()})
+            parts.append('اقرأ الخبر');pos=m.end()
+        parts.append(block[pos:]);out=''.join(parts)
+        if not entities:bot.send(chat,out);continue
+        result=bot.tg('sendMessage',data={'chat_id':chat,'text':out,'entities':__import__('json').dumps(entities),'disable_web_page_preview':True})
+        if not result.get('ok'):bot.send(chat,block)
 
 
 def send_chunks(chat,text):
@@ -178,6 +177,57 @@ DAILY.prayers=prayers
 DAILY.prices=prices
 EXTRA.fresh_headlines=headlines
 
+
+def summary_news(topic=''):
+    from bs4 import BeautifulSoup
+    now=dt.datetime.now(TZ);key='summaries:'+topic
+    if key in CACHE and time.monotonic()-CACHE[key][0]<300:return CACHE[key][1]
+    feeds=[('متنوع','https://www.aljazeera.net/rss'),('متنوع','https://feeds.bbci.co.uk/arabic/rss.xml')]
+    feeds += [(label,'https://arabic.rt.com/rss/'+slug+'/') for slug,label in [('world','العالم'),('business','اقتصاد'),('technology','علوم وتكنولوجيا'),('health','صحة'),('sport','رياضة'),('culture','ثقافة وفن')]]
+    norm=lambda s:re.sub(r'[أإآ]','ا',re.sub(r'[ًٌٍَُِّْـ]','',s)).lower()
+    query=norm(topic);terms=[w for w in re.findall(r'\w+',query) if w not in {'عن','في','اهم','اخر','اخبار','النهارده','العالم','العالمية','اليوم'}]
+    if re.search(r'ذكاء.*اصطناعي|artificial intelligence|\bai\b',query):terms=['ذكاء','اصطناعي']
+    def read(feed):
+        label,url=feed;rows=[]
+        try:
+            r=requests.get(url,timeout=8);r.raise_for_status()
+            if len(r.content)>2_000_000:return []
+            for item in ET.fromstring(r.content).findall('./channel/item')[:60]:
+                try:pub=parsedate_to_datetime(item.findtext('pubDate')).astimezone(TZ)
+                except Exception:continue
+                if pub.date()!=now.date() or pub>now:continue
+                title=BeautifulSoup(item.findtext('title',''),'html.parser').get_text(' ',strip=True)
+                desc=BeautifulSoup(item.findtext('description',''),'html.parser').get_text(' ',strip=True)
+                link=item.findtext('link','').strip()
+                if len(desc)<60 or not link.startswith('https://'):continue
+                hay=norm(title+' '+desc+' '+label)
+                if terms and not all(t in hay for t in terms):continue
+                desc=re.sub(r'\s+',' ',desc)
+                if len(desc)>650:desc=desc[:650].rsplit(' ',1)[0]+'…'
+                rows.append((pub,title,desc,link,label))
+        except Exception:pass
+        return rows
+    with ThreadPoolExecutor(max_workers=4) as pool:groups=list(pool.map(read,feeds))
+    selected=[];seen=set()
+    if terms:
+        candidates=sorted([x for group in groups for x in group],reverse=True)
+    else:
+        # One from each field before extra general headlines.
+        candidates=[]
+        for group in groups[2:]+groups[:2]:
+            if group:candidates.append(sorted(group,reverse=True)[0])
+    for row in candidates:
+        if row[1] in seen:continue
+        selected.append(row);seen.add(row[1])
+        if len(selected)>= (3 if terms else 7):break
+    stamp=now.strftime('%Y-%m-%d')+' '+clock12(now.strftime('%H:%M'))+' القاهرة'
+    if not selected:return 'مقدرتش أتحقق من أخبار بتاريخ اليوم فيها ملخص نصي عن '+(topic or 'الموضوع')+'. مش هحوّل عناوين بس لملخصات مخمّنة.\nتم التحقق: '+stamp
+    out=['أخبار '+(topic if topic else 'متنوعة')+'\nملخصات الناشرين المنشورة في RSS، مش قراءة للمقالات كاملة.\nتم التحقق: '+stamp+'، مش بث لحظي.']
+    for pub,title,desc,link,label in selected:out.append(label+' | '+clock12(pub.strftime('%H:%M'))+'\n'+title+'\n'+desc+'\nالمصدر: '+link)
+    text='\n\n'.join(out);CACHE[key]=(time.monotonic(),text);return text
+
+headlines=summary_news
+EXTRA.fresh_headlines=summary_news
 
 def adhkar(evening=False):
     lead='مختارات من أذكار المساء، عند الطلب، مش قائمة كاملة.' if evening else 'مختارات من أذكار الصباح، عند الطلب، مش قائمة كاملة.'
