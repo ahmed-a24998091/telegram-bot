@@ -270,3 +270,67 @@ if __name__=='__main__':
     threading.Thread(target=EXTRA.reminders_loop,daemon=True).start()
     print('news_adhkar_display_ready',flush=True)
     bot.main()
+
+# Source-first religious explanations. Never generate or grade a narration from memory.
+def scripture_norm(text):
+    import unicodedata
+    text=''.join(c for c in unicodedata.normalize('NFKD',text) if not unicodedata.combining(c))
+    return text.translate(str.maketrans('أإآىة٠١٢٣٤٥٦٧٨٩','ااايه0123456789')).replace('ـ','').strip()
+
+def scripture_reply(text):
+    from bs4 import BeautifulSoup
+    def clean(value):return BeautifulSoup(str(value),'html.parser').get_text(' ',strip=True)
+    norm=scripture_norm(text)
+    is_quran=bool(re.search(r'^/tafsir\b|(?:فسر|تفسير|اشرح|شرح|معني).*(?:ايه|سوره|قران)|^(?:ايه|سوره)\s',norm))
+    is_hadith=bool(re.search(r'^/hadith\b|(?:اشرح|شرح|معني|صحه|صحيح|تفسير).*(?:حديث)|hadeethenc\.com',norm))
+    if not (is_quran or is_hadith):return None
+    try:
+        if is_quran:
+            match=re.search(r'(?<!\d)(\d{1,3})\s*[:：]\s*(\d{1,3})(?!\d)',norm)
+            if match:surah,ayah=map(int,match.groups())
+            else:
+                r=requests.get('https://api.quran.com/api/v4/chapters',timeout=12);r.raise_for_status()
+                chapters=r.json()['chapters'];hits=[c for c in chapters if re.search(r'(?<!\w)'+re.escape(scripture_norm(c['name_arabic']))+r'(?!\w)',norm)]
+                nums=re.findall(r'\d+',norm)
+                if len(hits)!=1 or len(nums)!=1:return 'ابعت رقم السورة والآية، مثلاً /tafsir 2:255 أو اشرح آية ٢٥٥ من سورة البقرة. هجيب النص والتفسير من المصدر.'
+                surah,ayah=int(hits[0]['id']),int(nums[0])
+            if not 1<=surah<=114 or not 1<=ayah<=286:return 'رقم السورة أو الآية مش صحيح. مثال: /tafsir 2:255'
+            key=str(surah)+':'+str(ayah)
+            verse_url='https://api.quran.com/api/v4/quran/verses/uthmani?verse_key='+key
+            tafsir_url='https://api.quran.com/api/v4/tafsirs/16/by_ayah/'+key
+            r=requests.get(verse_url,timeout=12);r.raise_for_status();verses=r.json().get('verses',[])
+            if len(verses)!=1 or verses[0].get('verse_key')!=key:return 'ملقيتش الآية بالرقم ده. راجع رقم السورة والآية.'
+            r=requests.get(tafsir_url,timeout=12);r.raise_for_status();tafsir=r.json().get('tafsir',{})
+            if key not in tafsir.get('verses',{}) or not tafsir.get('text'):raise ValueError('source mismatch')
+            body=clean(tafsir['text'])
+            if len(body)>9000:return 'التفسير طويل على الرسالة. تقدر تقرأه من المصدر:\n'+tafsir_url
+            return ('الآية '+key+'\n'+verses[0]['text_uthmani']+'\n\nالتفسير الميسر، نص المصدر:\n'+body+'\n\nمصدر النص: '+verse_url+'\nمصدر التفسير: '+tafsir_url)
+        match=re.search(r'hadeethenc\.com/(?:ar/)?browse/hadith/(\d+)',text)
+        if not match:match=re.match(r'^/hadith\s+(\d+)\s*$',norm)
+        if not match:return 'ابعت رابط الحديث من موسوعة الأحاديث النبوية HadeethEnc أو رقمه في الموسوعة، مثلاً /hadith 5913. مش هخمن نص الحديث أو صحته من الذاكرة.'
+        hid=match.group(1)
+        if len(hid)>9:return 'رقم الحديث مش صحيح.'
+        url='https://hadeethenc.com/api/v1/hadeeths/one/?language=ar&id='+hid
+        r=requests.get(url,timeout=12)
+        if r.status_code==404:return 'ملقيتش الحديث بالرقم ده في الموسوعة. ابعت رابطه أو راجع الرقم.'
+        r.raise_for_status();item=r.json()
+        if str(item.get('id'))!=hid or not item.get('hadeeth') or not item.get('explanation'):raise ValueError('missing source')
+        return ('نص الحديث من الموسوعة:\n'+clean(item['hadeeth'])+'\n\nالتخريج: '+clean(item.get('attribution','غير مذكور'))+'\nالحكم كما ورد بالمصدر: '+clean(item.get('grade','غير مذكور'))+'\n\nشرح الموسوعة:\n'+clean(item['explanation'])+'\n\nالمصدر: '+url)
+    except Exception:
+        return 'مش قادر أوصل للمصدر الديني دلوقتي. جرّب تاني بعد شوية، مش هخمن نص آية أو حديث أو حكم عليه.'
+
+JOKES=(
+'واحد اشترى كرسي للمكتب، أول ما قعد عليه قال: كده أنا أخدت منصب.',
+'واحد سمّى الواي فاي عنده «نام بدري». كل ما يفتحه يفتكر النصيحة ويقفل الموبايل.',
+'واحد قال للمنبّه: إنت الوحيد اللي بيصرّ يسمعني صوته وأنا مش طايقه.',
+'الكمبيوتر راح للدكتور، قاله: كل ما أرتاح شوية حد يعملي Restart.',
+'واحد كتب في قائمة المهام: أعمل قائمة مهام. وشطبها وقال: يوم منتج الحمد لله.',
+'الكتاب قال للموبايل: الناس بتقلب في صفحاتي. قاله: وأنا بيقلبوا عليّ المواجع في التعليقات.',
+'واحد سأل الآلة الحاسبة: إنتي ليه هادية؟ قالتله: بحل مشاكلي بالأرقام.',
+'واحد خلّص ترتيب الديسكتوب، حس إنه نقل عفش الشقة كلها.'
+)
+def joke_reply(text):
+    norm=scripture_norm(text)
+    if not re.fullmatch(r'/joke|(?:(?:قول|قولي|قوللي|هات|هاتلي|احكي|احكيلي|عايز|عاوز|ابعت|ابعتلي)\s+)?(?:نكته|نكت|قفشه|قفشات)(?:\s+(?:جديده|تضحك|حلوه|مصريه))?[؟?!. ]*',norm):return None
+    import secrets
+    return secrets.choice(JOKES)
