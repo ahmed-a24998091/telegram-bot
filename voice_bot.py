@@ -29,20 +29,13 @@ def say(chat,text):
     import imageio_ffmpeg
     key=os.environ.get('GROQ_API_KEY','')
     if not key:raise ValueError('missing key')
+    r=requests.post('https://api.groq.com/openai/v1/audio/speech',headers={'Authorization':'Bearer '+key},json={'model':'canopylabs/orpheus-arabic-saudi','voice':'fahad','input':text,'response_format':'wav'},timeout=40)
+    r.raise_for_status()
+    if not r.content.startswith(b'RIFF') or len(r.content)>12*1024*1024:raise ValueError('invalid audio')
     with tempfile.TemporaryDirectory(prefix='voice-') as folder:
-        source=os.path.join(folder,'voice.mp3');ogg=os.path.join(folder,'voice.ogg')
-        try:
-            import edge_tts
-            asyncio.run(asyncio.wait_for(edge_tts.Communicate(text,os.environ.get('EGYPTIAN_VOICE','ar-EG-ShakirNeural')).save(source),35))
-            if os.path.getsize(source)<100:raise ValueError('empty audio')
-        except Exception:
-            # Groq remains a fallback, explicitly label the accent rather than silently promise Egyptian.
-            bot.send(chat,'الصوت المصري مش متاح دلوقتي، هستخدم الصوت العربي البديل.')
-            r=requests.post('https://api.groq.com/openai/v1/audio/speech',headers={'Authorization':'Bearer '+key},json={'model':'canopylabs/orpheus-arabic-saudi','voice':'fahad','input':text,'response_format':'wav'},timeout=40);r.raise_for_status()
-            if not r.content.startswith(b'RIFF') or len(r.content)>12*1024*1024:raise ValueError('invalid audio')
-            source=os.path.join(folder,'voice.wav')
-            with open(source,'wb') as f:f.write(r.content)
-        subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(),'-y','-i',source,'-c:a','libopus','-b:a','32k',ogg],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30,check=True)
+        wav=os.path.join(folder,'voice.wav');ogg=os.path.join(folder,'voice.ogg')
+        with open(wav,'wb') as f:f.write(r.content)
+        subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(),'-y','-i',wav,'-c:a','libopus','-b:a','32k',ogg],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30,check=True)
         with open(ogg,'rb') as f:result=bot.tg('sendVoice',data={'chat_id':chat},files={'voice':('voice.ogg',f,'audio/ogg')})
         if not result.get('ok'):raise ValueError('delivery')
 
