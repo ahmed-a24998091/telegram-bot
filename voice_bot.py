@@ -782,9 +782,11 @@ def contextual_handle(msg):
  pending=PENDING_MEDIA.get(chat,{})
  if pending and now-pending.get('time',0)<3600 and re.match(r'^(?:ترجم|ترجمة|باركود|اقرأ الباركود)',text)and not msg.get('reply_to_message'):
   msg={**msg,'reply_to_message':pending['media']}
- prior=LAST_OUTPUT.get(chat,{}).get('text','');result=FOLLOW_BASE(msg)
+ prior=LAST_OUTPUT.get(chat);result=FOLLOW_BASE(msg)
  if kind and place:
-  output=LAST_OUTPUT.get(chat,{}).get('text','')
+  latest=LAST_OUTPUT.get(chat,{});output=latest.get('text','')
+  success=latest is not prior and ((kind=='weather'and output.startswith('طقس '))or(kind=='prayer'and output.startswith('مواقيت الصلاة المحسوبة لـ '))or(kind=='time'and'المنطقة الزمنية: 'in output))
+  if not success:return result
   FOLLOW_CONTEXT[chat]={'kind':kind,'place':place.split('|')[0].strip(),'time':now}
  return result
 bot.handle=contextual_handle
