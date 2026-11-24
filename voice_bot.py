@@ -115,6 +115,10 @@ def say(chat,text):
 
 
 def handle(msg):
+    photo_text=msg.get('caption') or msg.get('text','')
+    media=msg if (msg.get('photo')or msg.get('document',{}).get('mime_type','').startswith('image/'))else msg.get('reply_to_message',{})
+    operation=image_operation(photo_text)
+    if operation and (media.get('photo')or media.get('document',{}).get('mime_type','').startswith('image/'))and msg.get('chat',{}).get('type')=='private':return process_photo(msg,media,operation)
     conversion_text=msg.get('caption') or msg.get('text','')
     conversion_file=msg.get('document') or msg.get('reply_to_message',{}).get('document')
     if conversion_file and conversion_bot.target_of(conversion_text) and re.search(r'حول|حوّل|convert|تحويل',conversion_text,re.I):
@@ -135,6 +139,42 @@ def handle(msg):
         print('voice_reply_failed',flush=True)
         bot.send(chat,'الصوت مش متاح دلوقتي.'+('\n'+answer if answer else ' جرّب تاني بعد شوية.'))
     finally:LOCK.release()
+
+IMAGE_LOCK=threading.Lock()
+def image_operation(text):
+ if re.search(r'ليه|لماذا|قلت|قولت|مقدرتش|معرفتش|مش عايز|مش عاوز|لا ت|ما ت|كنت|هل|تقدر|ينفع|اللي فات|السابقة',text,re.I):return None
+ if re.search(r'شيل|شيللي|احذف|إزالة|ازالة|امسح|remove',text,re.I)and re.search(r'خلفيه|خلفية|background',text,re.I):return 'removebg'
+ if re.search(r'كبر|كبّر|تكبير|upscale|حسن.*(?:دقه|دقة|جوده|جودة)',text,re.I):return 'upscale'
+ return None
+
+def process_photo(msg,media,operation):
+ from PIL import Image
+ chat=msg['chat']['id'];item=max(media['photo'],key=lambda x:x.get('file_size',0))if media.get('photo')else media.get('document',{})
+ if item.get('file_size',0)>8*1024*1024:bot.send(chat,'ابعت صورة أقل من٨ميجابايت.');return
+ if not IMAGE_LOCK.acquire(False):bot.send(chat,'فيه صورة بتتجهز. جرّب بعد دقيقة.');return
+ try:
+  bot.send(chat,'جاري التحويل');meta=bot.tg('getFile',data={'file_id':item['file_id']})
+  if not meta.get('ok'):raise ValueError('file')
+  r=requests.get('https://api.telegram.org/file/bot'+bot.TELEGRAM_TOKEN+'/'+meta['result']['file_path'],stream=True,timeout=40);r.raise_for_status();data=bytearray()
+  for chunk in r.iter_content(65536):
+   data.extend(chunk)
+   if len(data)>8*1024*1024:raise ValueError('size')
+  im=Image.open(io.BytesIO(data));pixels=im.width*im.height
+  if im.format not in ('JPEG','PNG','WEBP'):raise ValueError('format')
+  if pixels>(2_000_000 if operation=='upscale'else 8_000_000):
+   bot.send(chat,'التكبير لصور لحد٢ميجابيكسل، وإزالة الخلفية لحد٨ميجابيكسل. ابعت نسخة أصغر.');return
+  url=os.environ.get('CONVERTER_URL','').rstrip('/');key=os.environ.get('CONVERTER_KEY','')
+  requests.get(url+'/health',timeout=95).raise_for_status();r=requests.post(url+'/convert',data=data,headers={'Authorization':'Bearer '+key,'X-Format':'image','X-Target':operation},stream=True,timeout=90);r.raise_for_status();out=bytearray()
+  for chunk in r.iter_content(65536):
+   out.extend(chunk)
+   if len(out)>15*1024*1024:raise ValueError('output')
+  if not out.startswith(b'\x89PNG'):raise ValueError('format')
+  caption='خلفية شفافة. الأطراف والشعر والأجسام المتداخلة ممكن تحتاج تنظيف يدوي.'if operation=='removebg'else'تكبير٢× مع تحسين حدة بسيط، مش استرجاع تفاصيل مفقودة بالذكاء الاصطناعي.'
+  result=bot.tg('sendDocument',data={'chat_id':chat,'caption':caption},files={'document':(operation+'.png',io.BytesIO(out),'image/png')})
+  if not result.get('ok'):raise ValueError('send')
+  print('image_processing_sent',operation,flush=True)
+ except Exception:print('image_processing_failed',operation,flush=True);bot.send(chat,'مقدرتش أجهز الصورة دي. جرّب صورة JPG أو PNG أو WebP واضحة وأصغر.')
+ finally:IMAGE_LOCK.release()
 
 bot.handle=handle
 if __name__=='__main__':
