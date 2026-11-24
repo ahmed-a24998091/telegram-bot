@@ -794,6 +794,43 @@ def normalized_news_summary(topic=''):
  return NEWS_BASE_SUMMARY(topic)
 finish_bot.summary_news=normalized_news_summary;finish_bot.headlines=normalized_news_summary;finish_bot.EXTRA.fresh_headlines=normalized_news_summary
 
+
+VOICE_INPUT_LOCK=threading.BoundedSemaphore(1)
+VOICE_INPUT_BASE=bot.handle
+
+def voice_intent_handle(msg):
+ chat=msg['chat']['id'];doc=msg.get('document',{});item=msg.get('voice')or msg.get('audio')or(doc if doc.get('mime_type','').startswith('audio/')else None)
+ if not item or msg['chat'].get('type')!='private':return VOICE_INPUT_BASE(msg)
+ if item.get('file_size',0)>19*1024*1024:bot.send(chat,'التسجيل أقل من١٩ميجابايت. قسمه لو أطول.');return
+ if not VOICE_INPUT_LOCK.acquire(False):bot.send(chat,'فيه تسجيل بيتقرأ. جرّب بعد دقيقة.');return
+ text=None
+ try:
+  meta=bot.tg('getFile',data={'file_id':item['file_id']})
+  if not meta.get('ok'):raise ValueError('download')
+  path=meta['result']['file_path'];r=requests.get('https://api.telegram.org/file/bot'+bot.TELEGRAM_TOKEN+'/'+path,stream=True,timeout=40);r.raise_for_status();data=bytearray()
+  for chunk in r.iter_content(65536):
+   data.extend(chunk)
+   if len(data)>19*1024*1024:raise ValueError('size')
+  text=bot.transcribe_audio(bytes(data),item.get('file_name')or('recording.ogg'if msg.get('voice')else path.rsplit('/',1)[-1])).strip()
+  if not text or text=='[لا يوجد كلام واضح]':bot.send(chat,'مفيش كلام واضح أقدر أنفذ منه طلب. جرّب تسجيل أوضح.');text=None
+  elif len(text)>3500:bot.send(chat,text);bot.send(chat,'التسجيل طويل لتنفيذ طلب واحد. حدد المطلوب كتابة أو بتسجيل أقصر.');text=None
+ except Exception:bot.send(chat,'مقدرتش أفهم التسجيل دلوقتي. جرّب تاني أو اكتب طلبك. مش هنفذ حاجة بتخمين.');text=None
+ finally:VOICE_INPUT_LOCK.release()
+ if text:
+  # Transport types are removed so the exact same typed request passes the full context chain once.
+  typed={k:v for k,v in msg.items()if k not in('voice','audio','document','caption')};typed['text']=text
+  bot.send(chat,'فهمت من صوتك: '+re.sub(r'\s+',' ',text)[:450])
+  return VOICE_INPUT_BASE(typed)
+bot.handle=voice_intent_handle
+# Current help is intercepted outside its prior wording, so it matches deployed voice behavior.
+VOICE_HELP_BASE=bot.handle
+
+def voice_current_help(msg):
+ if (msg.get('text')or'').strip()in('/help','/commands','/features')and msg['chat'].get('type')=='private':
+  bot.send(msg['chat']['id'],'افتح /menu لكل الأقسام. صورة أو ملف بلا طلب: أسألك تختار، وأتذكره ساعة. اكتب كبرها أو شيل الخلفية بعدها أو رد عليها. Word للصورة يحفظ شكلها كصورة، مش تخطيطاً قابلاً للتحرير بالكامل.\nالتسجيل الصوتي: أقول باختصار فهمت إيه، ثم أنفذ بنفس قواعد الطلب المكتوب والسياق. راجع سطر الفهم، التفريغ قد يخطئ. تسجيل غير واضح لن ينفذ بالتخمين. /voice لرد صوتي.\n/studynew دراسة من نص أو PDF نصي/DOCX/PPTX/XLSX.\n/weather المدينة، /prayer المدينة، /time المدينة، وفي لندن؟ لمتابعة نفس الطلب، والصلاة؟ أو والطقس؟ لنفس آخر مكان خلال عشر دقائق.\nرد على النص بلخصه أو اشرحه، أو لآخر رد خلال عشر دقائق.\n/wiki و/papers و/imagesearch و/research مصادر محدودة وليست بحث Google أو قراءة أوراق كاملة.\n/forget يمسح المحفوظ والمراجع المؤقتة، مش رسائل Telegram. التنبيهات تحتاج إعداداً وتأكيداً، والاستضافة المجانية قد تتأخر.');return
+ return VOICE_HELP_BASE(msg)
+bot.handle=voice_current_help
+
 if __name__=='__main__':
     initialize_menu()
     conversion_bot.finish_bot.EXTRA.init_reminders()
