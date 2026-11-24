@@ -1163,6 +1163,64 @@ def feasibility_report(chat,v):
  r=bot.tg('sendDocument',data={'chat_id':chat,'caption':'تقرير المدخلات والحسابات والحدود، لا دراسة سوق مكتملة.'},files={'document':('feasibility-report.docx',out,'application/vnd.openxmlformats-officedocument.wordprocessingml.document')})
  if not r.get('ok'):raise ValueError('اترسل Excel لكن تعذر تسليم تقرير Word. الأرقام لسه في الإدخال، جرّب تاني.')
 
+# Editable transcription is separate from preservation of the original image.
+MEDIA_ACTIONS['textword']='حول النص المستخرج إلى Word قابل للتحرير'
+MEDIA_CHOICES_ORIGINAL=media_choices
+def media_choices(chat,media):
+ if not media_is_image(media):return MEDIA_CHOICES_ORIGINAL(chat,media)
+ rows=[[{'text':label,'callback_data':'file:'+act}]for label,act in [('تكبير 2x','upscale'),('حذف الخلفية','removebg'),('استخراج النص','ocr'),('وصف الصورة','describe'),('Word كصورة','word'),('Word نص قابل للتحرير','textword'),('إلغاء الملف المنتظر','cancel')]]
+ bot.tg('sendMessage',data={'chat_id':chat,'text':'وصلت الصورة. اختار العملية. Word كصورة يحفظ شكل الصفحة، وWord نص يستخرج كتابة قابلة للتعديل بدون ضمان الخطوط أو الجداول أو التخطيط. هفتكر الصورة ساعة.','reply_markup':json.dumps({'inline_keyboard':rows},ensure_ascii=False)})
+def editable_ocr_word(text):
+ from docx import Document
+ from docx.oxml import OxmlElement
+ from docx.oxml.ns import qn
+ from docx.shared import Pt,Inches,RGBColor
+ if not text.strip()or text.strip()in('[لا يوجد نص مقروء]','[غير واضح]'):raise ValueError('لا يوجد نص كاف للتحويل.')
+ if len(text)>24000:raise ValueError('النص أطول من٢٤ألف حرف. قسم الصورة، لم أختصر النص.')
+ d=Document();sec=d.sections[0];sec.top_margin=sec.bottom_margin=Inches(.7)
+ normal=d.styles['Normal'];normal.font.name='Arial';normal.font.size=Pt(12);normal.paragraph_format.space_after=Pt(5)
+ for line in text.splitlines():
+  # No inferred headings, columns or table cells. Keep literal content and line order.
+  chunks=[line[i:i+1400]for i in range(0,len(line),1400)]or['']
+  for chunk in chunks:
+   p=d.add_paragraph(chunk)
+   if re.search('[\u0600-\u06ff]',chunk):
+    p.alignment=0;b=OxmlElement('w:bidi');p._p.get_or_add_pPr().append(b)
+    for run in p.runs:
+     rtl=OxmlElement('w:rtl');run._r.get_or_add_rPr().append(rtl)
+ out=io.BytesIO();d.save(out);out.seek(0);return out
+def media_textword(msg,media):
+ chat=msg['chat']['id']
+ if not media_is_image(media):bot.send(chat,'الاختيار ده لصورة JPG أو PNG أو WebP، مش PDF ممسوح.');return
+ item=max(media['photo'],key=lambda x:x.get('file_size',0))if media.get('photo')else media['document'];mime='image/jpeg'if media.get('photo')else item.get('mime_type','')
+ if mime not in('image/jpeg','image/png','image/webp')or item.get('file_size',0)>8*1024*1024:bot.send(chat,'ابعت صورة JPG أو PNG أو WebP أقل من٨ميجابايت.');return
+ bot.send(chat,'جاري التحويل')
+ try:
+  meta=bot.tg('getFile',data={'file_id':item['file_id']})
+  if not meta.get('ok'):raise ValueError('تعذر تنزيل الصورة.')
+  r=requests.get('https://api.telegram.org/file/bot'+bot.TELEGRAM_TOKEN+'/'+meta['result']['file_path'],stream=True,timeout=40);r.raise_for_status();data=bytearray()
+  for chunk in r.iter_content(65536):
+   data.extend(chunk)
+   if len(data)>8*1024*1024:raise ValueError('حجم الصورة بعد التنزيل أكبر من الحد.')
+  text=bot.extract_image_text(bytes(data),mime);out=editable_ocr_word(text)
+  result=bot.tg('sendDocument',data={'chat_id':chat,'caption':'نص مستخرج قابل للتحرير، وليس إعادة بناء لتخطيط الصفحة أو خطوطها أو جداولها. راجع الكلمات والأرقام مع الأصل.'},files={'document':('editable-transcription.docx',out,'application/vnd.openxmlformats-officedocument.wordprocessingml.document')})
+  if not result.get('ok'):raise ValueError('تعذر تسليم ملف Word.')
+ except ValueError as e:bot.send(chat,str(e))
+ except Exception:bot.send(chat,'تعذر استخراج النص أو تسليم Word. الصورة محفوظة في الجلسة ساعة، جرب نسخة أوضح. لم أملأ النص الناقص بالتخمين.')
+TEXTWORD_INNER=bot.handle
+def textword_handle(msg):
+ chat=msg['chat']['id'];text=(msg.get('text')or msg.get('caption')or'').strip()
+ if msg['chat'].get('type')=='private'and(text=='/file_action textword'or re.search(r'^(?:حول|حوّل|حولها|حوّلها)\s+.{0,45}(?:word|وورد).{0,30}(?:نص|تحرير|تعديل)|^(?:word|وورد)\s+نص(?:\s+قابل\s+للتحرير)?$',text,re.I)):
+  if msg.get('photo')or msg.get('document'):media=msg
+  elif msg.get('reply_to_message',{}).get('photo')or msg.get('reply_to_message',{}).get('document'):media=msg['reply_to_message']
+  else:
+   state=PENDING_MEDIA.get(chat,{});media=state.get('media')if time.monotonic()-state.get('time',0)<3600 else None
+  if not media:bot.send(chat,'ابعت الصورة أو رد عليها واكتب Word نص قابل للتحرير.');return
+  return media_textword(msg,media)
+ return TEXTWORD_INNER(msg)
+bot.handle=textword_handle
+MENU_TASKS['ocr']='ابعت الصورة لوحدها. استخراج النص يعيد النص هنا؛ Word نص قابل للتحرير يجهز ملف كتابة بدون إعادة تخطيط الصفحة. Word كصورة يحفظ الشكل فقط. راجع النص والأرقام مع الأصل.'
+
 if __name__=='__main__':
     initialize_menu()
     conversion_bot.finish_bot.EXTRA.init_reminders()
