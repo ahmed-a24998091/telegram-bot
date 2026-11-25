@@ -66,3 +66,16 @@ class DocxOrderTests(unittest.TestCase):
         parent.text = 'Too deep'
         with self.assertRaises(ValueError):
             self.extract(d)
+
+class VerticalMerge(unittest.TestCase):
+    def test_vertical_and_rectangular_merges_not_repeated(self):
+        for rows,cols in ((2,1),(2,2)):
+            document=Document();table=document.add_table(rows=3,cols=3)
+            table.cell(0,0).merge(table.cell(rows-1,cols-1))
+            table.cell(0,0).text='MERGED literal amount 54.27 and source phrase.'
+            table.cell(2,2).text='LAST source cell'
+            out=io.BytesIO();document.save(out)
+            text=extract_function()(out.getvalue(),'fixture.docx')
+            self.assertEqual(text.count('MERGED'),1)
+            self.assertIn('54.27',text)
+            self.assertLess(text.index('MERGED'),text.index('LAST'))
