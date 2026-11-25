@@ -94,6 +94,7 @@ def word(data):
 
 def excel(data):
     import math
+    from decimal import Decimal
     sheets=data.get('sheets')if isinstance(data,dict)else None
     if not isinstance(sheets,list) or not 1<=len(sheets)<=8:raise ValueError('sheets')
     for info in sheets:
@@ -106,6 +107,7 @@ def excel(data):
             for value in row:
                 if isinstance(value,(int,float))and not isinstance(value,bool):
                     if isinstance(value,float)and not math.isfinite(value):raise ValueError('nonfinite cell')
+                    if len(''.join(map(str,Decimal(str(value)).as_tuple().digits)).rstrip('0'))>15:raise ValueError('numeric precision exceeds Excel capacity')
                 elif len(str(value))>1500:raise ValueError('cell length')
     w=Workbook();w.remove(w.active)
     for i,info in enumerate(data.get('sheets',[])[:8]):
