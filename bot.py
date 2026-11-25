@@ -403,21 +403,71 @@ def web():
     HTTPServer(("0.0.0.0", port), Ping).serve_forever()
 
 
+class MessageDispatcher:
+    """Finite in-memory queue and fixed workers, preserving order within a chat.
+
+    Admission blocks when full instead of silently dropping accepted messages.
+    This is not a durable queue: a process restart can lose queued work.
+    """
+    def __init__(self, handler, workers=4, capacity=64):
+        if workers < 1 or capacity < 1:
+            raise ValueError('positive dispatcher limits required')
+        self.handler = handler
+        self.capacity = capacity
+        self.pending = []
+        self.active = set()
+        self.condition = threading.Condition()
+        self.workers = [threading.Thread(target=self._run, daemon=True)
+                        for _ in range(workers)]
+        for worker in self.workers:
+            worker.start()
+
+    def submit(self, message):
+        with self.condition:
+            while len(self.pending) >= self.capacity:
+                self.condition.wait()
+            self.pending.append(message)
+            self.condition.notify_all()
+
+    def _run(self):
+        while True:
+            with self.condition:
+                while True:
+                    selected = next((i for i, message in enumerate(self.pending)
+                                     if message['chat']['id'] not in self.active), None)
+                    if selected is not None:
+                        message = self.pending.pop(selected)
+                        chat = message['chat']['id']
+                        self.active.add(chat)
+                        self.condition.notify_all()
+                        break
+                    self.condition.wait()
+            try:
+                self.handler(message)
+            except Exception:
+                print('dispatch_handler_failed', flush=True)
+            finally:
+                with self.condition:
+                    self.active.discard(chat)
+                    self.condition.notify_all()
+
+
 def main():
     if not TELEGRAM_TOKEN:
         raise SystemExit("ناقص TELEGRAM_TOKEN")
     threading.Thread(target=web, daemon=True).start()
     tg("deleteWebhook")
     offset = None
+    dispatcher = MessageDispatcher(safe_handle)
     print("البوت اشتغل")
     while True:
         try:
             r = tg("getUpdates", data={"timeout": 50, "offset": offset or ""})
             for u in r.get("result", []):
-                offset = u["update_id"] + 1
                 if "message" in u:
                     print("message_received", flush=True)
-                    threading.Thread(target=safe_handle, args=(u["message"],), daemon=True).start()
+                    dispatcher.submit(u["message"])
+                offset = u["update_id"] + 1
         except Exception as e:
             print("poll_loop_failed", flush=True)
             time.sleep(5)
