@@ -152,6 +152,9 @@ def excel(data):
 
 
 def slides(data):
+    for slide in data.get('slides',[]):
+        notes=slide.get('notes','')
+        if not isinstance(notes,str) or len(notes)>1500:raise ValueError('slide notes exceed supported length or type')
     from pptx import Presentation
     from pptx.util import Inches as SI
     from pptx.dml.color import RGBColor as PC
