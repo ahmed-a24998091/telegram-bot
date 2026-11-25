@@ -950,25 +950,71 @@ def review_doi(doi):
   except Exception:return {'doi':doi,'status':'تعذر التحقق تقنياً، ليس حكماً على وجود المرجع'}
   finally:CROSSREF_NEXT=time.monotonic()+1.1
 
+def review_extended_checks(text):
+ """Local observations only. Offsets refer to extracted text, not visual pages."""
+ from collections import Counter
+ parts=[(i+1,m.start()+len(m.group())-len(m.group().lstrip()),m.end()-len(m.group())+len(m.group().rstrip()),m.group().strip()) for i,m in enumerate(re.finditer(r'[^\n]+',text)) if m.group().strip()]
+ findings=[];counts=Counter();limit=24
+ def add(kind,reason,rows):
+  counts[kind]+=1
+  if len(findings)<limit:findings.append((kind,reason,rows))
+ number=r'(?<!\w)[+\-−]?[0-9٠-٩]+(?:[.,٫٬:/][0-9٠-٩]+)*(?:\s*[%٪])?'
+ seen={};numeric={};inventory=[]
+ cite=re.compile(r'https?://|10\.\d{4,9}/|\[\d+(?:\s*[-,،]\s*\d+)*\]|\([^()\n]{0,80}(?:19|20)\d{2}[^()\n]{0,30}\)')
+ claim=re.compile(r'أثبتت الدراسات|اثبتت الدراسات|تشير الدراسات|أجمع العلماء|اجمع العلماء|أثبت علميا|دون استثناء|بلا استثناء|studies show|research proves|all researchers agree',re.I)
+ headings=[]
+ for pid,start,end,p in parts:
+  row=(pid,start,end,p)
+  norm=' '.join(p.split())
+  # Formatting markers are not evidence of source repetitions.
+  if len(norm)>=60 and not norm.startswith(('[صفحة','[شريحة','[ورقة','[خلية')):
+   if norm in seen:add('تكرار حرفي داخلي','الفقرات متطابقة بعد توحيد المسافات فقط. راجع هل التكرار مقصود أو ناتج عن الاستخراج؛ لا حكم انتحال.',[seen[norm],row])
+   else:seen[norm]=row
+  nums=re.findall(number,p)
+  if nums:
+   if len(inventory)<10:inventory.append((row,nums[:12],len(nums)))
+   skeleton=re.sub(number,'<رقم>',norm)
+   if len(re.findall(r'[^\W\d_]+',skeleton))>=5:
+    if skeleton in numeric and numeric[skeleton][0]!=nums:add('نفس الصياغة بأرقام مختلفة','الصياغة متطابقة بعد حجب الأرقام لكن القيم مختلفة. قد تصف فترات أو حالات مختلفة؛ يلزم فحص السياق، ليس تناقضاً مثبتاً.',[numeric[skeleton][1],row])
+    else:numeric[skeleton]=(nums,row)
+  if claim.search(p) and not cite.search(p):add('ادعاء يحتاج إحالة محددة','لم تلتقط القاعدة علامة مرجع أو رابطاً في هذه الفقرة نفسها. قد توجد إحالة خارجها؛ لم تثبت صحة الادعاء أو خطأه.',[row])
+  quotes=re.findall(r'«[^»\n]{15,}»|“[^”\n]{15,}”|"[^"\n]{15,}"',p)
+  if quotes and not (cite.search(p)or re.search(r'(?:ص\s*\.?|صفحة|pp?\.)\s*[0-9٠-٩]+',p,re.I)):
+   add('اقتباس بلا إحالة ظاهرة في الفقرة','علامات الاقتباس موجودة لكن لم تلتقط القاعدة رابطاً أو مرجعاً أو صفحة في الفقرة. المطابقة الحرفية مع الأصل لم تتم.',[row])
+  # Different lines may intentionally share a quotation; report document totals below instead.
+  wc=len(re.findall(r'\w+',p))
+  if wc>180:add('فقرة طويلة','تحتوي '+str(wc)+' كلمة تقريباً. اقتراح تقسيمها حسب الأفكار، لا حكم على جودة المنطق.',[row])
+  if 1<=wc<=12 and len(p)<=100 and not nums and not re.search(r'[.!؟?،؛,:]$',p):headings.append(row)
+ if text.count('«')!=text.count('»')or text.count('“')!=text.count('”')or text.count('"')%2:
+  counts['علامات اقتباس غير متوازنة']+=1
+  if len(findings)<limit:findings.append(('علامات اقتباس غير متوازنة','عدد علامات الفتح والإغلاق في النص المستخرج غير متساو. قد يكون من الاستخراج أو أسلوب الاقتباس، راجع الأصل.',[]))
+ out=['فحص أوسع داخل النص','هذه ملاحظات بقواعد محلية معلنة، وليست قراءة دلالية كاملة أو حكماً على هوية الكاتب. لم يرسل هذا الفحص النص لأي خدمة خارجية.','خريطة النص','فقرات/أسطر غير فارغة: '+str(len(parts))+'؛ كلمات تقريبية: '+str(len(re.findall(r'\w+',text)))+'. أرقام الفقرات وإزاحات الحروف أدناه تخص النص المستخرج، لا صفحات المستند الأصلي.','ملخص الملاحظات']
+ out.append('؛ '.join(k+': '+str(v)for k,v in counts.items())or'لم تلتقط القواعد المحددة ملاحظة. هذا لا يثبت خلو النص من الأخطاء.')
+ out.append('ملاحظات محددة وخطوات المراجعة')
+ for n,(kind,reason,rows)in enumerate(findings,1):
+  out.extend([str(n)+'. '+kind,reason])
+  for pid,start,end,p in rows:out.append('فقرة '+str(pid)+'؛ حروف '+str(start+1)+'–'+str(end)+'؛ مقتطف حرفي: '+p[:500]+(' [المقطع أطول]'if len(p)>500 else''))
+ total=sum(counts.values())
+ if total>len(findings):out.append('عرض أول '+str(len(findings))+' ملاحظة من '+str(total)+' التقطتها القواعد. الباقي لم يعرض؛ ليس فحصاً كاملاً لكل ادعاء.')
+ out.extend(['جرد أرقام للمراجعة','القيم التالية من المصدر كما وردت. لم أتحقق من جمعها أو مقامات النسب أو الوحدات أو بياناتها الأصلية. اختلاف رقم وحده لا يثبت تناقضاً.'])
+ for row,nums,count in inventory:out.append('فقرة '+str(row[0])+': '+' | '.join('\u200e'+v+'\u200e'for v in nums)+(' [عرض أول12قيمة في الفقرة]'if count>12 else''))
+ if not inventory:out.append('لم تلتقط القاعدة قيماً رقمية؛ الأعداد المكتوبة بالكلمات لا يشملها الجرد.')
+ elif sum(bool(re.search(number,p))for _,_,_,p in parts)>10:out.append('الجرد يعرض أول10فقرات رقمية فقط.')
+ out.extend(['البنية الظاهرة وخطة التحسين','البنية أدناه مرشحة بحسب طول السطر فقط؛ ليست فهماً مؤكداً للعناوين أو ترتيبها المنطقي.'])
+ if headings:
+  out.append('عناوين قصيرة محتملة: '+' | '.join('فقرة '+str(r[0])+': '+r[3]for r in headings[:8]))
+ else:out.append('لم تلتقط القاعدة عناوين قصيرة مستقلة. قد يكون النص قصيراً أو العناوين مدمجة في الفقرات؛ راجع هدف النص ومقدمته وتسلسل أفكاره وخاتمته.')
+ out.extend(['ما يحتاج مصدراً أو قراءة بشرية','ابدأ بالملاحظات ذات موضع محدد، ثم طابق الاقتباسات والادعاءات مع أصولها. سجّل لكل رقم وحدته وفترته ومقامه. راجع ترابط الحجة وتعريف المصطلحات والعينة والمنهج والنتائج؛ هذه الجوانب لم تتحقق آلياً. لا ادعاء بفحص كل الحقائق أو كل المراجع.'])
+ return out
+
+
 def review_analyze(text,source,comparison=None):
  import datetime as dt
  from collections import Counter
- stamp=dt.datetime.now(__import__('zoneinfo').ZoneInfo('Africa/Cairo')).isoformat(timespec='minutes')
- paragraphs=[p.strip()for p in re.split(r'\n+',text)if p.strip()]
- words=re.findall(r'\w+',text,re.UNICODE);sentences=[s.strip()for s in re.split(r'[.!؟?\n]+',text)if len(s.strip())>=35]
- out=['تقرير مراجعة النص والمراجع','وقت الإعداد: '+stamp+' القاهرة','المصدر: '+source,'طبيعة التقرير وحدوده','هذا ليس كاشفاً للذكاء الاصطناعي، ولا يحدد من كتب النص أو كيف كُتب. لا نسبة احتمال ولا دقة ولا حكم أصالة أو اتهام. النص البشري والمولد قد يشتركان في هذه السمات. التقرير قائمة مراجعة تحريرية وبحثية، لا يستخدم وحده لاتخاذ قرار ضد طالب أو باحث.','نطاق القراءة','عدد الكلمات التقريبي: '+str(len(words))+'؛ فقرات نصية مستخرجة: '+str(len(paragraphs))+'. الصور والرسوم لم تقرأ. Word لا يوفر علامات صفحات موثوقة؛ علامات PDF/الشرائح إن وجدت تبقى في النص.','مقاطع تحتاج مراجعة بشرية']
- findings=[]
- seen=Counter(re.sub(r'\s+',' ',s)for s in sentences)
- for s,count in seen.items():
-  if count>1:findings.append(('تكرار نصي داخلي','تكرر هذا المقطع '+str(count)+' مرات. قد يكون تكراراً مقصوداً أو من الاستخراج أو تحريراً يحتاج تحسيناً، وليس دليلاً على استخدام AI.',s))
- # Values and quotations are check candidates, never described as false without a source.
- for p in paragraphs:
-  if re.search(r'\d(?:[\d.,٬٫]*\d)?\s*(?:%|٪|بالمائة|في المائة)|[٠-٩]+\s*(?:%|٪)',p):findings.append(('رقم أو نسبة تحتاج سنداً','تحقق من المجتمع والفترة والمقام وطريقة الحساب ومصدر الرقم. لم أفحص بياناته الأصلية ولا أصفه بالمختلق.',p))
-  if re.search(r'«[^»]{15,}»|“[^”]{15,}”|"[^"\n]{15,}"',p):findings.append(('اقتباس يحتاج مطابقة بالأصل','وجود علامات اقتباس لا يثبت النقل الحرفي. راجع المؤلف والصفحة والطبعة والسياق. لم أقرأ أصل الاقتباس.',p))
-  if re.search(r'أثبتت الدراسات|اثبتت الدراسات|تشير الدراسات|أجمع العلماء|اجمع العلماء|أثبت علميا|proven by studies|studies show',p,re.I):findings.append(('عبارة إحالة عامة','هذه عبارة إحالة عامة، يلزم ربطها بدراسة محددة وقراءة منهجها. قد توجد إحالة في مكان آخر من الملف. ليست إشارة موثوقة لهوية الكاتب.',p))
- if not findings:out.append('لم تلتقط القواعد المحدودة مقاطع من الأنواع المحددة. هذا لا يعني خلو النص من الأخطاء أو إثباتاً أنه بشري أو آلي.')
- for i,(label,reason,p)in enumerate(findings[:16],1):out.extend([str(i)+'. '+label,'المقطع الحرفي: '+p[:1000]+(' [عرض مقتطف، المقطع أطول]'if len(p)>1000 else''),'سبب المراجعة: '+reason])
- if len(findings)>16:out.append('عدد المقاطع المرشحة أكبر؛ عرض أول16مقطعاً. ليست مراجعة شاملة لكل عبارة.')
+ stamp=dt.datetime.now(__import__('zoneinfo').ZoneInfo('Africa/Cairo')).strftime('%Y/%m/%d %H:%M')
+ words=re.findall(r'\w+',text,re.UNICODE)
+ out=['تقرير فحص النص والمراجع','وقت الإعداد: '+stamp+' القاهرة','المصدر: '+source,'طبيعة التقرير وحدوده','ليس كاشف AI ولا يحدد هوية الكاتب أو يعطي نسبة أو حكم أصالة. لا يستخدم وحده لاتخاذ قرار ضد شخص. الصور والرسوم لا تقرأ.']
+ out.extend(review_extended_checks(text))
  dois=reference_doi_candidates(text)
  out.append('فحص وجود المراجع')
  if not dois:out.append('لم أجد DOI صريحاً في النص. المراجع بأسماء أو عناوين فقط لم يتم التحقق منها. غياب DOI ليس دليلاً على عدم وجود المرجع.')
@@ -998,9 +1044,16 @@ def review_export(chat,state,kind):
    paragraphs.append(raw[:cut]);raw=raw[cut:].lstrip()
   if raw:paragraphs.append(raw)
  if len(paragraphs)>160:raise ValueError('report too long')
- sections=[]
- for i in range(0,len(paragraphs),8):sections.append({'heading':'المراجعة'if i==0 else'تابع المراجعة','paragraphs':paragraphs[i:i+8]})
- out=office_flow.word({'title':'تقرير مراجعة النص والمراجع','sections':sections});name='text-review.docx';mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+ section_names={'طبيعة التقرير وحدوده','فحص أوسع داخل النص','خريطة النص','ملخص الملاحظات','ملاحظات محددة وخطوات المراجعة','جرد أرقام للمراجعة','البنية الظاهرة وخطة التحسين','ما يحتاج مصدراً أو قراءة بشرية','فحص وجود المراجع','مطابقة النص مع مصادر أخرى','مقارنة محدودة مع نص ثان قدمه المستخدم','الخطوة التالية','مصادر الفحص وحدوده'}
+ sections=[];current={'heading':'بيانات التقرير','paragraphs':[]}
+ for p in paragraphs:
+  if p=='تقرير فحص النص والمراجع':continue
+  if p in section_names:
+   if current['paragraphs']:sections.append(current)
+   current={'heading':p,'paragraphs':[]}
+  else:current['paragraphs'].append(p)
+ if current['paragraphs']:sections.append(current)
+ out=office_flow.word({'title':'تقرير فحص النص والمراجع','sections':sections});name='text-review.docx';mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
  if kind=='pdf':
   r=requests.post(os.environ['CONVERTER_URL'].rstrip('/')+'/convert',data=out.getvalue(),headers={'Authorization':'Bearer '+os.environ['CONVERTER_KEY'],'X-Format':'docx','X-Target':'pdf'},timeout=95);r.raise_for_status()
   if not r.content.startswith(b'%PDF'):raise ValueError('تعذر تجهيز PDF سليم. النتيجة محفوظة، جرب تاني أو اختار Word.')
@@ -1013,7 +1066,7 @@ def review_request(msg):
  if text in('/forget','/reset'):REVIEW_STATE.pop(chat,None);return False
  if time.monotonic()-state.get('time',0)>3600:REVIEW_STATE.pop(chat,None);state={}
  if text in('/reviewnew','/menu_task reviewnew'):
-  REVIEW_STATE[chat]={'awaiting':True,'time':time.monotonic()};bot.send(chat,'ابعت النص أو PDF نصي/DOCX/PPTX/XLSX أقل من٨ميجابايت وحتى٢٤ألف حرف. سأراجع مقاطع وأرقاماً واقتباسات ووجود أول٥معرفات DOI، لا أستطيع تحديد أن الكاتب استخدم AI ولا أعطي نسبة. فحص DOI يرسل المعرفات فقط إلى Crossref. الصور لا تقرأ هنا. /cancel للإلغاء.');return True
+  REVIEW_STATE[chat]={'awaiting':True,'time':time.monotonic()};bot.send(chat,'ابعت النص أو PDF نصي/DOCX/PPTX/XLSX أقل من٨ميجابايت وحتى٢٤ألف حرف. هتستلم تقرير فيه خريطة النص، تكرار حرفي، جرد أرقام ومقارنة نفس الصياغة بقيم مختلفة، ادعاءات واقتباسات محتاجة سند، وبنية ظاهرة وخطوات تحسين، مع فحص وجود أول٥معرفات DOI. دي قواعد محدودة وليست تحققاً شاملاً من كل معلومة. لا أستطيع تحديد أن الكاتب استخدم AI ولا أعطي نسبة. فحص DOI يرسل المعرفات فقط إلى Crossref. الصور لا تقرأ هنا. /cancel للإلغاء.');return True
  if text=='/cancel'and state:REVIEW_STATE.pop(chat,None);bot.send(chat,'اتلغت جلسة مراجعة النص.');return True
  if text.startswith('/reviewexport '):
   kind=text.split()[-1]
@@ -1034,7 +1087,7 @@ def review_request(msg):
     value,name=study_load(msg);report=review_analyze(value,name);state={'text':value,'source':name}
    state.update(report=report,time=time.monotonic(),awaiting=False);REVIEW_STATE[chat]=state
    # Expiry housekeeping replaces silent oldest-session eviction.
-   bot.send(chat,'اتجهز تقرير مراجعة النص، ليس كشف AI أو حكم انتحال. اختار Word أو PDF. لم أستخدم كاشفاً أو نسبة دقة. للمقارنة مع نص آخر قدمته أنت: /reviewcompare ثم النص.')
+   bot.send(chat,'اتجهز تقرير فحص أوسع: مواضع مرقمة، ملاحظات وأسبابها وخطوات المراجعة، وجرد أرقام وبنية ظاهرة. اختار Word أو PDF. مش كشف AI ولا حكم انتحال. للمقارنة مع نص آخر قدمته أنت: /reviewcompare ثم النص.')
    bot.tg('sendMessage',data={'chat_id':chat,'text':'تصدير التقرير الكامل وحدوده','reply_markup':json.dumps({'inline_keyboard':[[{'text':'تقرير Word','callback_data':'review:word'},{'text':'تقرير PDF','callback_data':'review:pdf'}]]},ensure_ascii=False)})
   except ValueError as e:bot.send(chat,str(e))
   except Exception:bot.send(chat,'تعذرت مراجعة النص. ابعت نصاً واضحاً أو ملفاً نصياً مدعوماً، لا أستنتج نتيجة من فشل القراءة.')
