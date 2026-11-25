@@ -129,6 +129,9 @@ def excel(data):
                     v=G.clean(v,1500)
                     safe.append("'"+v if v.startswith(('=','+','-','@')) else v)
             ws.append(safe)
+            # openpyxl infers strings matching Excel errors as error cells.
+            for cell,value in zip(ws[ws.max_row],safe):
+                if isinstance(value,str):cell.data_type='s'
         ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions;ws.sheet_properties.pageSetUpPr.fitToPage=True
         ws.page_setup.orientation='landscape';ws.page_setup.paperSize=ws.PAPERSIZE_A4;ws.page_setup.fitToWidth=1;ws.page_setup.fitToHeight=0
         for row in ws:
