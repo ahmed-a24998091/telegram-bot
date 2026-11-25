@@ -90,7 +90,8 @@ def handle(msg):
  if msg.get('chat',{}).get('type')!='private':return ORIGINAL(msg)
  text=msg.get('caption')or msg.get('text','');media=msg if msg.get('photo')or msg.get('document',{}).get('mime_type','').startswith('image/')else msg.get('reply_to_message',{})
  if target_of(text)=='docx'and(media.get('photo')or media.get('document',{}).get('mime_type','').startswith('image/')):return convert_scan(msg,media)
- if target_of(text)=='docx'and re.search(r'مسح|ممسوح|سكان|scan',text,re.I)and(msg.get('document')or msg.get('reply_to_message',{}).get('document')):return convert_scan(msg,msg if msg.get('document')else msg['reply_to_message'])
+ scan_doc=msg.get('document')or msg.get('reply_to_message',{}).get('document')or{}
+ if target_of(text)=='docx'and scan_doc.get('file_name','').lower().endswith('.pdf')and re.search(r'(?<!\w)(?:مسح|المسح|ممسوح(?:ة|ه)?|الممسوح(?:ة|ه)?|سكان|السكان|scan(?:ned|s)?)(?!\w)',text,re.I):return convert_scan(msg,msg if msg.get('document')else msg['reply_to_message'])
  current=msg.get('document');reply=msg.get('reply_to_message',{}).get('document');text=msg.get('caption')or msg.get('text','')
  document=current or(reply if re.search(r'حول|حوّل|convert|تحويل',text,re.I)else None)
  if document:
