@@ -692,22 +692,33 @@ def study_extract(data,name):
   if empty:result='[قراءة جزئية: شرائح بلا نص مستخرج: '+', '.join(map(str,empty))+'.]\n'+result
  else:
   from openpyxl import load_workbook
-  w=load_workbook(io.BytesIO(data),read_only=True,data_only=False);parts=[];count=0
+  w=load_workbook(io.BytesIO(data),read_only=True,data_only=False);parts=[];count=0;content_chars=0;formulas=0;errors=0
   try:
+   if len(w.worksheets)>40:raise ValueError('أوراق كثيرة. الحد٤٠ورقة في القراءة الدراسية.')
    for sheet in w:
-    parts.append('[ورقة '+sheet.title+']')
-    if sheet.max_row>2000 or sheet.max_column>40:raise ValueError('ورقة كبيرة. الحد٢٠٠٠صف و٤٠عمود في القراءة الدراسية.')
-    for row in sheet.iter_rows():
+    parts.append('[ورقة '+sheet.title+('؛ مخفية'if sheet.sheet_state!='visible'else'')+']')
+    if (sheet.max_row or 0)>2000 or (sheet.max_column or 0)>40:raise ValueError('ورقة كبيرة. الحد٢٠٠٠صف و٤٠عمود في القراءة الدراسية.')
+    # Do not trust producer dimension metadata to hide later cells.
+    sheet.reset_dimensions()
+    for row_number,row in enumerate(sheet.iter_rows(),1):
+     if row_number>2000 or len(row)>40:raise ValueError('ورقة كبيرة. الحد٢٠٠٠صف و٤٠عمود في القراءة الدراسية.')
      cells=[]
      for c in row:
       if c.value is not None:
        value=str(c.value)
-       if c.data_type=='f':value='[معادلة غير محسوبة: '+value+']'
+       count+=1;content_chars+=len(value.strip())
+       if count>12000:raise ValueError('خلايا كثيرة، قسم الملف.')
+       if content_chars>300000:raise ValueError('نص الخلايا كبير. قسم الملف، لم أقتطع منه.')
+       if c.data_type=='f':formulas+=1;value='[معادلة غير محسوبة: '+value+']'
+       elif c.data_type=='e':errors+=1;value='[خطأ في الخلية: '+value+']'
        cells.append(c.coordinate+': '+value)
-     if cells:parts.append(' | '.join(cells));count+=len(cells)
-     if count>12000:raise ValueError('خلايا كثيرة، قسم الملف.')
+     if cells:parts.append(' | '.join(cells))
   finally:w.close()
-  result='\n'.join(parts)
+  if content_chars<35:raise ValueError('مفيش محتوى كافي في الخلايا. أسماء الأوراق وعناوين الخلايا مش محتوى.')
+  notes=['[قراءة نصية للخلايا، تشمل المخفية. لا تشمل الصور والرسوم والتعليقات أو تنسيق الملف.]']
+  if formulas:notes.append('[يوجد '+str(formulas)+' معادلة: أعرض الصيغة فقط، لم أحسب نتائجها أو أقرأ نتائج مخزنة.]')
+  if errors:notes.append('[يوجد '+str(errors)+' خلية بها خطأ في الملف الأصلي؛ ليست نتيجة رقمية صحيحة.]')
+  result='\n'.join(notes+parts)
  if len(re.sub(r'\[[^]]+\]','',result).strip())<35:raise ValueError('مفيش نص كافي. الصور والرسوم لا تقرأ في هذه الجلسة.')
  return result
 
