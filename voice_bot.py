@@ -664,14 +664,32 @@ def study_extract(data,name):
   from pptx import Presentation
   p=Presentation(io.BytesIO(data))
   if len(p.slides)>80:raise ValueError('الملف أكبر من٨٠شريحة.')
-  parts=[]
+  parts=[];budget={'shapes':0,'chars':0};empty=[]
+  def read_shapes(shapes,depth=0):
+   if depth>12:raise ValueError('تداخل مجموعات الشرائح أكبر من حد القراءة. ابعت نسخة أبسط.')
+   lines=[]
+   for shape in shapes:
+    budget['shapes']+=1
+    if budget['shapes']>10000:raise ValueError('عناصر الشرائح كثيرة. قسم الملف لأجزاء.')
+    values=[]
+    if hasattr(shape,'shapes'):values.extend(read_shapes(shape.shapes,depth+1))
+    else:
+     if shape.has_text_frame:values.append(shape.text)
+     if shape.has_table:
+      for row in shape.table.rows:
+       values.append(' | '.join(cell.text for cell in row.cells if not cell.is_spanned))
+     budget['chars']+=sum(len(value)for value in values)
+     if budget['chars']>300000:raise ValueError('نص الشرائح كبير. قسم الملف، لم أقتطع منه.')
+    lines.extend(values)
+   return lines
   for i,slide in enumerate(p.slides,1):
-   lines=['[شريحة '+str(i)+']']
-   for shape in slide.shapes:
-    if shape.has_text_frame:lines.append(shape.text)
-    if shape.has_table:lines.extend(' | '.join(c.text for c in row.cells)for row in shape.table.rows)
-   parts.append('\n'.join(lines))
-  result='\n\n'.join(parts)
+   lines=read_shapes(slide.shapes)
+   if not any(value.strip()for value in lines):
+    empty.append(i);lines=['[لا يوجد نص قابل للاستخراج من الشريحة؛ لم أقرأ الصور أو الرسوم فيها.]']
+   parts.append('[شريحة '+str(i)+']\n'+'\n'.join(lines))
+  if budget['chars']<35:raise ValueError('مفيش نص كافي في الشرائح. الصور والرسوم لا تقرأ هنا، وأرقام الشرائح مش محتوى.')
+  result='[قراءة نصية حسب ترتيب عناصر الملف، مش ترتيباً بصرياً مضموناً. لا تشمل صوراً أو رسوماً أو ملاحظات المتحدث.]\n\n'+'\n\n'.join(parts)
+  if empty:result='[قراءة جزئية: شرائح بلا نص مستخرج: '+', '.join(map(str,empty))+'.]\n'+result
  else:
   from openpyxl import load_workbook
   w=load_workbook(io.BytesIO(data),read_only=True,data_only=False);parts=[];count=0
