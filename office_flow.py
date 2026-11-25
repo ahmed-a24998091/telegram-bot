@@ -93,6 +93,20 @@ def word(data):
 
 
 def excel(data):
+    import math
+    sheets=data.get('sheets')if isinstance(data,dict)else None
+    if not isinstance(sheets,list) or not 1<=len(sheets)<=8:raise ValueError('sheets')
+    for info in sheets:
+        if not isinstance(info,dict):raise ValueError('sheet')
+        headers=info.get('headers');rows=info.get('rows',[])
+        if not isinstance(headers,list) or not 1<=len(headers)<=12:raise ValueError('headers')
+        if not isinstance(rows,list) or len(rows)>300:raise ValueError('rows')
+        for row in [headers]+rows:
+            if not isinstance(row,list) or len(row)>len(headers):raise ValueError('row width')
+            for value in row:
+                if isinstance(value,(int,float))and not isinstance(value,bool):
+                    if isinstance(value,float)and not math.isfinite(value):raise ValueError('nonfinite cell')
+                elif len(str(value))>1500:raise ValueError('cell length')
     w=Workbook();w.remove(w.active)
     for i,info in enumerate(data.get('sheets',[])[:8]):
         ws=w.create_sheet(re.sub(r'[\\/*?:\[\]]','',str(info.get('name','Sheet')))[:31] or 'Sheet'+str(i+1));ws.sheet_view.rightToLeft=True
