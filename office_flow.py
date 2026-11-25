@@ -43,6 +43,21 @@ def readable_links(p):
 
 
 def word(data):
+    # Provider output is data, not a promise that schema limits were followed.
+    if not isinstance(data,dict) or not isinstance(data.get('title','مستند'),str) or len(data.get('title','مستند'))>120:raise ValueError('word title')
+    sections=data.get('sections',[])
+    if not isinstance(sections,list) or not 1<=len(sections)<=20:raise ValueError('word sections')
+    for section in sections:
+        if not isinstance(section,dict):raise ValueError('word section')
+        heading=section.get('heading','');paragraphs=section.get('paragraphs',[])
+        if not isinstance(heading,str) or len(heading)>120:raise ValueError('word heading')
+        if not isinstance(paragraphs,list) or len(paragraphs)>12 or any(not isinstance(p,str) or len(p)>1600 for p in paragraphs):raise ValueError('word paragraphs')
+        headers=section.get('headers',[]);rows=section.get('rows',[])
+        if not isinstance(headers,list) or len(headers)>6 or not isinstance(rows,list) or len(rows)>50:raise ValueError('word table')
+        cols=len(headers) or (len(rows[0])if rows and isinstance(rows[0],list)else 0)
+        if rows and not 1<=cols<=6:raise ValueError('word columns')
+        if any(not isinstance(row,list) or len(row)!=cols for row in rows):raise ValueError('word row width')
+        if any(len(str(value))>500 for row in ([headers]+rows)for value in row):raise ValueError('word cell length')
     from docx import Document
     d=Document();sec=d.sections[0];sec.top_margin=sec.bottom_margin=Inches(.8);sec.left_margin=sec.right_margin=Inches(.85)
     for name,size,color in [('Normal',12,'251F21'),('Title',26,'251F21'),('Heading 1',17,'397467')]:
