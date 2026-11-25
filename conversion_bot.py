@@ -65,18 +65,24 @@ def convert_document(msg,target=''):
   else:bot.send(chat,'مقدرتش أحول الملف ده. PDF لازم يكون نصي ومش محمي، لحد٢٠صفحة و١٠ميجابايت. الجداول العربية المعقدة أو الصور الممسوحة محتاجة ملف أصلي. وباقي أوفيس لحد١٥ميجابايت.')
  finally:LOCK.release()
 SCAN_NOTE='الملف حافظ شكل الصفحة كصورة داخل Word، مش نص أو جدول قابل للتعديل بالكامل. أي تفريغ نصي مضاف غير متحقق منه ولازم تراجعه؛ الكلمات غير الواضحة معلّمة. الشكل والخط محفوظين كصورة، والخط في النص القابل للتعديل تقريبي مش مطابق. التحويل القابل للتعديل بنفس التخطيط لسه غير مكتمل.'
+def bounded_scan_response(response,limit):
+ try:
+  response.raise_for_status();data=bytearray()
+  for chunk in response.iter_content(65536):
+   if len(data)+len(chunk)>limit:raise ValueError('size')
+   data.extend(chunk)
+  return bytes(data)
+ finally:response.close()
 def convert_scan(msg,media):
  chat=msg['chat']['id'];item=max(media['photo'],key=lambda x:x.get('file_size',0))if media.get('photo')else media['document'];ext='scan'if item.get('file_name','').lower().endswith('.pdf')else'image'
  if item.get('file_size',0)>8*1024*1024:bot.send(chat,'الصورة أو المسح لحد٨ميجابايت وخمس صفحات PDF.');return
  if not LOCK.acquire(False):bot.send(chat,'في ملف بيتحول. جرّب بعد دقيقة.');return
  try:
-  bot.send(chat,'جاري التحويل');meta=bot.tg('getFile',data={'file_id':item['file_id']});r=requests.get('https://api.telegram.org/file/bot'+bot.TELEGRAM_TOKEN+'/'+meta['result']['file_path'],timeout=40);r.raise_for_status();data=r.content
-  if len(data)>8*1024*1024:raise ValueError('size')
-  url=os.environ['CONVERTER_URL'].rstrip('/');requests.get(url+'/health',timeout=95).raise_for_status();r=requests.post(url+'/convert',data=data,headers={'Authorization':'Bearer '+os.environ['CONVERTER_KEY'],'X-Format':ext,'X-Target':'docx'},timeout=95);r.raise_for_status()
-  if len(r.content)>MAX_BYTES:raise ValueError('output')
-  with zipfile.ZipFile(io.BytesIO(r.content))as z:
+  bot.send(chat,'جاري التحويل');meta=bot.tg('getFile',data={'file_id':item['file_id']});r=requests.get('https://api.telegram.org/file/bot'+bot.TELEGRAM_TOKEN+'/'+meta['result']['file_path'],stream=True,timeout=40);data=bounded_scan_response(r,8*1024*1024)
+  url=os.environ['CONVERTER_URL'].rstrip('/');requests.get(url+'/health',timeout=95).raise_for_status();r=requests.post(url+'/convert',data=data,headers={'Authorization':'Bearer '+os.environ['CONVERTER_KEY'],'X-Format':ext,'X-Target':'docx'},stream=True,timeout=95);output=bounded_scan_response(r,MAX_BYTES)
+  with zipfile.ZipFile(io.BytesIO(output))as z:
    if 'word/document.xml'not in z.namelist()or len(z.infolist())>10000 or sum(i.file_size for i in z.infolist())>60*1024*1024 or any('vbaproject'in n.lower()for n in z.namelist()):raise ValueError('docx')
-  result=bot.tg('sendDocument',data={'chat_id':chat,'caption':SCAN_NOTE},files={'document':('scan-preserved.docx',io.BytesIO(r.content),MIME['docx'])})
+  result=bot.tg('sendDocument',data={'chat_id':chat,'caption':SCAN_NOTE},files={'document':('scan-preserved.docx',io.BytesIO(output),MIME['docx'])})
   if not result.get('ok'):raise ValueError('send')
  except Exception:bot.send(chat,'مقدرتش أحفظ المسح ده بشكل سليم. ابعت صورة أوضح أو PDF لحد٥صفحات و٨ميجابايت. مش هبعت نص مشوّه.')
  finally:LOCK.release()
