@@ -92,6 +92,11 @@ def word(data):
     out=io.BytesIO();d.save(out);out.seek(0);return out
 
 
+def excel_number_format(value):
+    # Scientific notation avoids hidden zeroes and overflow at bounded widths.
+    return '0.##############E+00'if value and (abs(value)<0.0001 or abs(value)>=10**15)else'#,##0.###############'
+
+
 def excel(data):
     import math
     from decimal import Decimal
@@ -132,7 +137,9 @@ def excel(data):
                 c.fill=PatternFill('solid',fgColor='397467' if c.row==1 else ('F1F5F3' if c.row%2==0 else 'FFFFFF'))
                 c.alignment=Alignment(horizontal='right',vertical='center',wrap_text=True,readingOrder=2,indent=1)
                 c.border=Border(bottom=Side(style='hair',color='DCE3DF'))
-                if isinstance(c.value,(int,float)):c.number_format='#,##0.##########'
+                if isinstance(c.value,(int,float)):
+                    # Keep tiny values visible and large values printable at bounded widths.
+                    c.number_format=excel_number_format(c.value)
             ws.row_dimensions[row[0].row].height=32 if row[0].row==1 else 40
         for j in range(1,len(headers)+1):ws.column_dimensions[get_column_letter(j)].width=min(48,max(24,max(len(str(c.value or '')) for c in ws[get_column_letter(j)])+3))
         ws.print_options.horizontalCentered=True;ws.print_title_rows='1:1';ws.print_area=ws.dimensions
