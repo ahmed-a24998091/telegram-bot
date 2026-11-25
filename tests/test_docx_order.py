@@ -79,3 +79,18 @@ class VerticalMerge(unittest.TestCase):
             self.assertEqual(text.count('MERGED'),1)
             self.assertIn('54.27',text)
             self.assertLess(text.index('MERGED'),text.index('LAST'))
+
+
+class DocxHyperlinkTests(unittest.TestCase):
+    extract=DocxOrderTests.extract
+    def link(self,p,label,target):
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from docx.opc.constants import RELATIONSHIP_TYPE as RT
+        h=OxmlElement('w:hyperlink');h.set(qn('r:id'),p.part.relate_to(target,RT.HYPERLINK,is_external=True));r=OxmlElement('w:r');t=OxmlElement('w:t');t.text=label;r.append(t);h.append(r);p._p.append(h)
+    def test_link_target_in_order(self):
+        d=Document();p=d.add_paragraph('FIRST ');self.link(p,'source','https://example.org/source');p.add_run(' LAST');text=self.extract(d);self.assertIn('FIRST source (https://example.org/source) LAST',text)
+    def test_table_link_and_visible_url(self):
+        d=Document();p=d.add_table(rows=1,cols=1).cell(0,0).paragraphs[0];self.link(p,'https://example.org/source','https://example.org/source');text=self.extract(d);self.assertEqual(text.count('https://example.org/source'),1)
+    def test_tabs_breaks_and_no_external_fetch(self):
+        d=Document();p=d.add_paragraph('before\tline\nbreak ');self.link(p,'data','https://example.invalid/no-fetch');text=self.extract(d);self.assertIn('before\tline\nbreak data (https://example.invalid/no-fetch)',text)
