@@ -112,3 +112,14 @@ class ContentControls(unittest.TestCase):
         d=Document();node=d.add_paragraph('DEEP')._p
         for _ in range(14):node=self.wrap(node)
         with self.assertRaises(ValueError):self.extract(d)
+
+class InlineControls(unittest.TestCase):
+    extract=DocxOrderTests.extract
+    def test_tabs_breaks_and_hyperlinks_retained(self):
+        from docx.oxml import OxmlElement
+        d=Document();p=d.add_paragraph('BEFORE ');run=p.add_run('AMOUNT\t54.27\nEND123');control=OxmlElement('w:sdt');content=OxmlElement('w:sdtContent');control.append(content);run._r.addprevious(control);content.append(run._r);DocxHyperlinkTests().link(p,'source','https://example.org/control');h=p._p[-1];content.append(h);p.add_run(' AFTER');text=self.extract(d);self.assertIn('BEFORE AMOUNT\t54.27\nEND123source (https://example.org/control) AFTER',text)
+    def test_inline_depth_refused(self):
+        from docx.oxml import OxmlElement
+        d=Document();p=d.add_paragraph();node=p.add_run('DEEP')._r
+        for _ in range(14):wrapper=OxmlElement('w:sdt');node.addprevious(wrapper);wrapper.append(node);node=wrapper
+        with self.assertRaises(ValueError):self.extract(d)
