@@ -15,3 +15,9 @@ class OfficeProvenance(unittest.TestCase):
   out,sent=self.run_build(20,1);self.assertEqual(out,[]);self.assertTrue(sent)
  def test_exact_section_limit_succeeds(self):
   out,_=self.run_build(18,20);self.assertEqual(len(out[0]['sections']),20)
+
+ def test_beyond_legacy_item_caps_preserved(self):
+  out,_=self.run_build(1,21,13);pars=[p for s in out[0]['sections'][1:]for p in s['paragraphs']];self.assertEqual(len(pars),34);self.assertEqual(pars[-1],'https://example.org/source-20');self.assertIn('تم التحقق: fixture12',pars)
+ def test_many_sources_use_existing_section_limit(self):
+  out,_=self.run_build(1,220);self.assertEqual(sum(len(s['paragraphs'])for s in out[0]['sections'][1:]),220)
+  out,sent=self.run_build(1,229);self.assertEqual(out,[]);self.assertTrue(sent)
