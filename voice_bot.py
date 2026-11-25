@@ -1677,6 +1677,13 @@ INTAKE_INNER=bot.handle
 def focused_intake_handle(msg):
  if msg.get('chat',{}).get('type')!='private':return INTAKE_INNER(msg)
  chat=msg['chat']['id'];text=(msg.get('text')or'').strip()
+ # An unfinished form owns /cancel before older completed-report wrappers.
+ if text=='/cancel':
+  for states,label in [(PROOF_STATE,'المراجعة اللغوية'),(REVIEW_STATE,'مراجعة النص'),(STUDY_STATE,'الدراسة')]:
+   if states.get(chat,{}).get('awaiting'):
+    states.pop(chat,None);bot.send(chat,'اتلغت جلسة '+label+'.');return
+  if chat in FEASIBILITY_STATE:
+   FEASIBILITY_STATE.pop(chat,None);bot.send(chat,'اتلغى إدخال النموذج المالي.');return
  command='/'+text.split()[-1]if text.startswith('/menu_task ')else text
  selected=INTAKE_COMMANDS.get(command)
  if selected:
