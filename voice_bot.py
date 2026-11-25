@@ -535,8 +535,8 @@ def study_buttons(chat):
  bot.tg('sendMessage',data={'chat_id':chat,'text':'المصدر جاهز. اختر المهمة. الملفات نصوص وجداول فقط، لا تشمل الرسوم أو الصور، ولا تغني عن مراجعة المدرس.','reply_markup':json.dumps({'inline_keyboard':rows},ensure_ascii=False)})
 
 def study_plain(text):
- text=re.sub(r'<br\s*/?>','\n',text,flags=re.I)
- text=re.sub(r'<[^>]+>','',text);text=text.replace('**','').replace('__','').replace('`','')
+ # Source math and XML-like text are literal, not HTML to delete.
+ text=text.replace('**','').replace('__','').replace('`','')
  lines=[]
  for line in text.split('\n'):
   if re.fullmatch(r'[\s|:–-]+',line):continue
