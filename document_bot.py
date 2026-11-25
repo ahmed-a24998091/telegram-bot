@@ -9,6 +9,36 @@ ORIGINAL = bot.handle
 MAX_BYTES = 19 * 1024 * 1024
 
 
+def docx_ordered_text(document):
+    from docx.text.paragraph import Paragraph
+    from docx.table import Table
+    from docx.oxml.ns import qn
+    budget={'blocks':0,'chars':0}
+    def blocks(parent,depth=0):
+        if depth>12:raise ValueError('تداخل جداول Word أكبر من حد القراءة. ابعت نسخة أبسط أو نصاً منسوخاً.')
+        element=parent.element.body if hasattr(parent,'element')and hasattr(parent.element,'body')else parent._tc
+        parts=[]
+        for child in element.iterchildren():
+            budget['blocks']+=1
+            if budget['blocks']>20000:raise ValueError('محتوى Word كبير للقراءة. قسمه لأجزاء.')
+            if child.tag==qn('w:p'):
+                text=Paragraph(child,parent).text
+                budget['chars']+=len(text)
+                if budget['chars']>300000:raise ValueError('نص Word كبير للقراءة. قسمه لأجزاء، لم أقتطع منه.')
+                parts.append(text)
+            elif child.tag==qn('w:tbl'):
+                table=Table(child,parent)
+                for row in table.rows:
+                    cells=[];seen=set()
+                    for cell in row.cells:
+                        if cell._tc in seen:continue
+                        seen.add(cell._tc)
+                        cells.append(' / '.join(blocks(cell,depth+1)))
+                    parts.append(' | '.join(cells))
+        return parts
+    return '\n'.join(blocks(document))
+
+
 def extract(data, name):
     if name.lower().endswith('.pdf'):
         from pypdf import PdfReader
@@ -30,10 +60,7 @@ def extract(data, name):
             if sum(i.file_size for i in z.infolist()) > 60 * 1024 * 1024:
                 raise ValueError('محتوى ملف Word كبير بعد الفك. قسّمه لأجزاء.')
         d = Document(io.BytesIO(data))
-        parts = [p.text for p in d.paragraphs]
-        for table in d.tables:
-            parts.extend(' | '.join(c.text for c in row.cells) for row in table.rows)
-        return '\n'.join(parts)
+        return docx_ordered_text(d)
     raise ValueError('صيغة Word القديمة DOC مش مدعومة حالياً. احفظها DOCX أو PDF وابعتها.')
 
 
