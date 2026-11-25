@@ -19,3 +19,7 @@ class TableDimensionMetadata(unittest.TestCase):
 class WrappedTableSource(unittest.TestCase):
  def test_wrapped_body_tables_and_nested_guard(self):
   source=base64.b64decode(re.findall(r'RUN echo (\S+) \| base64 -d > /app/table_worker.py',(Path(__file__).resolve().parents[1]/'converter.Dockerfile').read_text())[-1]).decode();ast.parse(source);self.assertIn('body_tables(doc.element.body)',source);self.assertIn("qn('w:sdtContent')",source);self.assertIn("raise ValueError('nested tables need separate input')",source)
+
+class WrappedCellSource(unittest.TestCase):
+ def test_cell_controls_and_separators(self):
+  source=base64.b64decode(re.findall(r'RUN echo (\S+) \| base64 -d > /app/table_worker.py',(Path(__file__).resolve().parents[1]/'converter.Dockerfile').read_text())[-1]).decode();tree=ast.parse(source);self.assertIn('cell_text(c)',source);self.assertIn("qn('w:tab')",source);self.assertIn("qn('w:br')",source);self.assertIn("raise ValueError('cell wrapper depth')",source)
