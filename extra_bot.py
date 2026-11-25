@@ -212,6 +212,22 @@ if __name__ == '__main__':
 
 PRAYER_RETRY=0
 
+def prayer_alert_source_valid(data,date):
+    import math
+    try:
+        meta=data['meta']
+        if data['date']['gregorian']['date']!=date or meta['timezone']!='Africa/Cairo':return False
+        if meta['method']['id']!=5 or meta['school']!='STANDARD' or meta['latitudeAdjustmentMethod']!='ANGLE_BASED':return False
+        for key,expected in(('latitude',30.0444),('longitude',31.2357)):
+            value=float(meta[key])
+            if not math.isfinite(value)or abs(value-expected)>0.01:return False
+        for key in('Fajr','Dhuhr','Asr','Maghrib','Isha'):
+            value=data['timings'][key]
+            if not isinstance(value,str)or not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]',value):return False
+        return True
+    except (KeyError,TypeError,ValueError,OverflowError):return False
+
+
 def queue_prayer_alerts():
     global PRAYER_RETRY
     if time.monotonic()<PRAYER_RETRY:return
@@ -222,8 +238,8 @@ def queue_prayer_alerts():
     try:
         import requests
         url='https://api.aladhan.com/v1/timings/'+now.strftime('%d-%m-%Y')
-        r=requests.get(url,params={'latitude':30.0444,'longitude':31.2357,'method':5,'timezonestring':'Africa/Cairo'},timeout=12);r.raise_for_status();data=r.json()['data']
-        if data['date']['gregorian']['date']!=now.strftime('%d-%m-%Y') or abs(data['meta']['latitude']-30.0444)>.02:raise ValueError('invalid date/location')
+        r=requests.get(url,params={'latitude':30.0444,'longitude':31.2357,'method':5,'timezonestring':'Africa/Cairo','school':0,'latitudeAdjustmentMethod':3},timeout=12);r.raise_for_status();data=r.json()['data']
+        if not prayer_alert_source_valid(data,now.strftime('%d-%m-%Y')):raise ValueError('invalid prayer source metadata')
         names={'Fajr':'الفجر','Dhuhr':'الظهر','Asr':'العصر','Maghrib':'المغرب','Isha':'العشاء'}
         schedule=[(label,dt.datetime.combine(now.date(),dt.time.fromisoformat(data['timings'][key][:5]),TZ)) for key,label in names.items()]
         with STORE.connect() as c:
@@ -254,24 +270,26 @@ def check_price_alerts():
     try:
         import requests,decimal
         r=requests.get('https://getdaleelak.com/api/v1/feed.json?asset=us-dollar,gold-21k',timeout=12);r.raise_for_status();data=r.json();prices={};now=dt.datetime.now(TZ)
-        for a in data.get('assets',[]):
-            asset='usd'if a.get('id')=='USD-EGP'else'gold'if a.get('id')=='GOLD21K-EGP'else None
-            if not asset:continue
-            stamp=dt.datetime.fromisoformat(a['observedAt'].replace('Z','+00:00')).astimezone(TZ)
-            if stamp>now or now-stamp>dt.timedelta(hours=24)or a.get('freshness',{}).get('stale')is True:continue
-            seller=next((x for x in a.get('sellers',[])if x.get('seller')==('National Bank of Egypt (NBE)'if asset=='usd'else'BTC')),None)
-            if seller:
-                price=decimal.Decimal(str(seller['sell']))
-                if price.is_finite()and price>0:prices[asset]=(price,stamp)
+        from daily_tools import verified_price_asset
+        for asset_id,asset,seller_name in(('USD-EGP','usd','National Bank of Egypt (NBE)'),('GOLD21K-EGP','gold','BTC')):
+            matches=[a for a in data.get('assets',[])if isinstance(a,dict)and a.get('id')==asset_id]
+            if len(matches)!=1:continue
+            a=matches[0];sellers=[x for x in a.get('sellers',[])if isinstance(x,dict)and x.get('seller')==seller_name]
+            if len(sellers)!=1:continue
+            checked=verified_price_asset({**a,'sellers':sellers},asset_id,now)
+            if checked:
+                stamp,quotes,conflict=checked
+                prices[asset]=(quotes[0][2],stamp,conflict)
         for rid,chat,asset,direction,threshold in rows:
             if asset not in prices:continue
-            price,stamp=prices[asset]
+            price,stamp,conflict=prices[asset]
             if not(price>=threshold if direction=='above'else price<=threshold):continue
             with STORE.connect() as c:
                 # Serialize cancellation and delivery, and never send after cancellation wins the lock.
                 current=c.execute("SELECT id FROM bot_price_alerts WHERE id=%s AND chat_id=%s AND active=TRUE FOR UPDATE",(rid,chat)).fetchone()
                 if not current:continue
                 label='الدولار بسعر بيع الأهلي المصري'if asset=='usd'else'ذهب٢١بسعر بيع BTC بدون مصنعية'
-                result=bot.tg('sendMessage',data={'chat_id':chat,'text':f'تنبيه السعر رقم{rid}: {label} وصل {price} جنيه. وقت المصدر {stamp:%Y-%m-%d %H:%M} القاهرة. سعر استرشادي، مش عرض مضمون ولا توصية تعامل. المصدر https://getdaleelak.com/en/api'})
+                warning=' المصدر يشير لتعارض بين مزوديه؛ تحقق من البنك أو التاجر.'if conflict else''
+                result=bot.tg('sendMessage',data={'chat_id':chat,'text':f'تنبيه السعر رقم{rid}: {label} وصل {price} جنيه. وقت المصدر {stamp:%Y-%m-%d %H:%M} القاهرة. سعر استرشادي، مش عرض مضمون ولا توصية تعامل.{warning} المصدر https://getdaleelak.com/en/api'})
                 if result.get('ok'):c.execute("DELETE FROM bot_price_alerts WHERE id=%s",(rid,))
     except Exception:print('price_alert_source_failed',flush=True)
