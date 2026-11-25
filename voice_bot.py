@@ -1463,7 +1463,8 @@ def proof_proposals(text):
   before=e.get('before');after=e.get('after');reason=e.get('reason')
   if not all(isinstance(v,str)for v in(before,after,reason))or not 2<=len(before)<=200 or not 1<=len(after)<=220 or len(reason)>250 or before==after or text.count(before)!=1:
    rejected+=1;continue
-  if re.findall(r'\d+',before)!=re.findall(r'\d+',after)or re.findall(r'https?://\S+',before)!=re.findall(r'https?://\S+',after):rejected+=1;continue
+  numeric=r'[+\-−]?\d+(?:[.,٬٫:/\-]\d+)*(?:[ \t]*[%٪])?'
+  if re.findall(numeric,before)!=re.findall(numeric,after)or re.findall(r'https?://\S+',before)!=re.findall(r'https?://\S+',after):rejected+=1;continue
   accepted.append({'before':before,'after':after,'reason':reason})
  return accepted,rejected
 def proof_report(state):
