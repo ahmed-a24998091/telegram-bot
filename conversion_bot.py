@@ -75,7 +75,7 @@ def convert_scan(msg,media):
   url=os.environ['CONVERTER_URL'].rstrip('/');requests.get(url+'/health',timeout=95).raise_for_status();r=requests.post(url+'/convert',data=data,headers={'Authorization':'Bearer '+os.environ['CONVERTER_KEY'],'X-Format':ext,'X-Target':'docx'},timeout=95);r.raise_for_status()
   if len(r.content)>MAX_BYTES:raise ValueError('output')
   with zipfile.ZipFile(io.BytesIO(r.content))as z:
-   if 'word/document.xml'not in z.namelist():raise ValueError('docx')
+   if 'word/document.xml'not in z.namelist()or len(z.infolist())>10000 or sum(i.file_size for i in z.infolist())>60*1024*1024 or any('vbaproject'in n.lower()for n in z.namelist()):raise ValueError('docx')
   result=bot.tg('sendDocument',data={'chat_id':chat,'caption':SCAN_NOTE},files={'document':('scan-preserved.docx',io.BytesIO(r.content),MIME['docx'])})
   if not result.get('ok'):raise ValueError('send')
  except Exception:bot.send(chat,'مقدرتش أحفظ المسح ده بشكل سليم. ابعت صورة أوضح أو PDF لحد٥صفحات و٨ميجابايت. مش هبعت نص مشوّه.')
