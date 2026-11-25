@@ -14,6 +14,19 @@ def docx_ordered_text(document):
     from docx.table import Table
     from docx.oxml.ns import qn
     budget={'blocks':0,'chars':0}
+    def paragraph_text(element,parent):
+        from docx.text.run import Run
+        parts=[]
+        for child in element.iterchildren():
+            if child.tag==qn('w:r'):parts.append(Run(child,parent).text)
+            elif child.tag==qn('w:hyperlink'):
+                label=''.join(Run(run,parent).text for run in child.iter(qn('w:r')))
+                rid=child.get(qn('r:id'));rel=parent.part.rels.get(rid) if rid else None
+                target=rel.target_ref if rel is not None and rel.is_external else ''
+                parts.append(label+(' ('+target+')'if target and target not in label else''))
+            elif child.tag!=qn('w:pPr'):
+                parts.append(''.join(n.text or '' for n in child.iter(qn('w:t'))))
+        return ''.join(parts)
     def blocks(parent,depth=0):
         if depth>12:raise ValueError('تداخل جداول Word أكبر من حد القراءة. ابعت نسخة أبسط أو نصاً منسوخاً.')
         element=parent.element.body if hasattr(parent,'element')and hasattr(parent.element,'body')else parent._tc
@@ -22,7 +35,7 @@ def docx_ordered_text(document):
             budget['blocks']+=1
             if budget['blocks']>20000:raise ValueError('محتوى Word كبير للقراءة. قسمه لأجزاء.')
             if child.tag==qn('w:p'):
-                text=Paragraph(child,parent).text
+                text=paragraph_text(child,parent)
                 budget['chars']+=len(text)
                 if budget['chars']>300000:raise ValueError('نص Word كبير للقراءة. قسمه لأجزاء، لم أقتطع منه.')
                 parts.append(text)
