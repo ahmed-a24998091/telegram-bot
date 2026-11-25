@@ -47,12 +47,20 @@ def extract(data, name):
             raise ValueError('الملف محمي بكلمة سر. ابعت نسخة مفتوحة.')
         if len(reader.pages) > 80:
             raise ValueError('الملف أكبر من ٨٠ صفحة. قسّمه لأجزاء.')
-        parts = []
+        parts = [];content_chars=0;empty_pages=[]
         for i, page in enumerate(reader.pages):
-            parts.append('[صفحة %s]\n%s' % (i + 1, page.extract_text() or ''))
-        text = '\n\n'.join(parts)
-        if len(text.strip()) < 60:
-            raise ValueError('الملف غالباً سكان أو صور ومفيهوش نص قابل للاستخراج. ابعت الصفحات صور عشان أقرأها.')
+            body=page.extract_text() or ''
+            content_chars+=len(body.strip())
+            if content_chars>300000:raise ValueError('نص PDF كبير للقراءة. قسمه لأجزاء، لم أقتطع منه.')
+            if not body.strip():
+                empty_pages.append(i+1)
+                body='[لا يوجد نص قابل للاستخراج من هذه الصفحة؛ قد تكون فارغة أو صورة. لم أقرأ محتواها البصري.]'
+            parts.append('[صفحة %s]\n%s' % (i+1,body))
+        if content_chars<60:
+            raise ValueError('الملف فارغ أو فيه نص قليل قابل للاستخراج؛ قد يكون سكان أو صوراً. ابعت النص أو صور الصفحات المطلوبة، لم أعتبر أرقام الصفحات محتوى.')
+        text='\n\n'.join(parts)
+        if empty_pages:
+            text='[قراءة نصية جزئية فقط: الصفحات '+', '.join(map(str,empty_pages))+' بلا نص قابل للاستخراج. لا تشمل القراءة الصور أو الرسوم، ولا يعني هذا أن الصفحات فارغة بصرياً.]\n\n'+text
         return text
     if name.lower().endswith('.docx'):
         from docx import Document
