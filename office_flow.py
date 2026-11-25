@@ -171,9 +171,11 @@ def slides(data):
 
 
 def kind_of(text):
-    if re.search(r'/word\b|(?<!\w)(?:وورد|ملف\s+ورد|مستند\s+ورد|word|docx)(?!\w)',text,re.I):return 'word'
-    if re.search(r'/excel\b|(?<!\w)(?:اكسل|إكسل|إكسيل|اكسيل|excel|xlsx)(?!\w)',text,re.I):return 'excel'
-    if re.search(r'/slides\b|(?<!\w)(?:بوربوينت|بور بوينت|باوربوينت|باور بوينت|powerpoint|pptx)(?!\w)',text,re.I):return 'slides'
+    # Arabic articles/prepositions attach to nouns; English names stay whole words.
+    prefix=r'(?:و)?(?:ب|ل|ك)?(?:ال|لل)?'
+    if re.search(r'/word\b|(?<!\w)(?:word|docx)(?!\w)|(?<!\w)'+prefix+r'(?:وورد)(?!\w)|(?<!\w)(?:ملف|مستند)\s+ورد(?!\w)',text,re.I):return 'word'
+    if re.search(r'/excel\b|(?<!\w)(?:excel|xlsx)(?!\w)|(?<!\w)'+prefix+r'(?:اكسل|إكسل|إكسيل|اكسيل)(?!\w)',text,re.I):return 'excel'
+    if re.search(r'/slides\b|(?<!\w)(?:powerpoint|pptx)(?!\w)|(?<!\w)'+prefix+r'(?:بوربوينت|بور بوينت|باوربوينت|باور بوينت)(?!\w)',text,re.I):return 'slides'
     return None
 
 
