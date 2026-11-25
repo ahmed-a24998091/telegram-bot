@@ -94,3 +94,21 @@ class DocxHyperlinkTests(unittest.TestCase):
         d=Document();p=d.add_table(rows=1,cols=1).cell(0,0).paragraphs[0];self.link(p,'https://example.org/source','https://example.org/source');text=self.extract(d);self.assertEqual(text.count('https://example.org/source'),1)
     def test_tabs_breaks_and_no_external_fetch(self):
         d=Document();p=d.add_paragraph('before\tline\nbreak ');self.link(p,'data','https://example.invalid/no-fetch');text=self.extract(d);self.assertIn('before\tline\nbreak data (https://example.invalid/no-fetch)',text)
+
+class ContentControls(unittest.TestCase):
+    extract=DocxOrderTests.extract
+    def wrap(self,node,tag='w:sdt'):
+        from docx.oxml import OxmlElement
+        wrapper=OxmlElement(tag);node.addprevious(wrapper)
+        if tag=='w:sdt':
+            content=OxmlElement('w:sdtContent');wrapper.append(content);content.append(node)
+        else:wrapper.append(node)
+        return wrapper
+    def test_body_control_retained_in_order(self):
+        d=Document();d.add_paragraph('BEFORE');p=d.add_paragraph('CONTROL amount54.27 END123');self.wrap(p._p);d.add_paragraph('AFTER');text=self.extract(d);self.assertLess(text.index('BEFORE'),text.index('CONTROL'));self.assertLess(text.index('END123'),text.index('AFTER'));self.assertIn('54.27',text)
+    def test_control_table_cell_and_custom_xml(self):
+        d=Document();table=d.add_table(rows=1,cols=1);p=table.cell(0,0).paragraphs[0];p.text='CELL CONTROL';self.wrap(p._p);self.wrap(table._tbl,'w:customXml');self.assertIn('CELL CONTROL',self.extract(d))
+    def test_deep_wrappers_refused(self):
+        d=Document();node=d.add_paragraph('DEEP')._p
+        for _ in range(14):node=self.wrap(node)
+        with self.assertRaises(ValueError):self.extract(d)
