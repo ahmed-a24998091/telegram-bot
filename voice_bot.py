@@ -1053,7 +1053,20 @@ def review_export(chat,state,kind):
    current={'heading':p,'paragraphs':[]}
   else:current['paragraphs'].append(p)
  if current['paragraphs']:sections.append(current)
- out=office_flow.word({'title':'تقرير فحص النص والمراجع','sections':sections});name='text-review.docx';mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+ # The shared Word builder accepts 20 sections of 12 paragraphs. Preserve
+ # every report paragraph, including long findings, without silent slicing.
+ bounded=[]
+ for section in sections:
+  for start in range(0,len(section['paragraphs']),12):
+   bounded.append({'heading':section['heading']+(' (تابع)'if start else''),'paragraphs':section['paragraphs'][start:start+12]})
+ if len(bounded)>20:
+  # Compact headings into the paragraph stream only when section overhead
+  # would exceed the builder's limit. The report already has a160piece cap.
+  flat=[]
+  for section in sections:flat.extend([section['heading']]+section['paragraphs'])
+  bounded=[{'heading':'التقرير'if i==0 else'تابع التقرير','paragraphs':flat[i:i+12]}for i in range(0,len(flat),12)]
+ if len(bounded)>20:raise ValueError('التقرير أطول من حد التصدير، قسم النص لأجزاء.')
+ out=office_flow.word({'title':'تقرير فحص النص والمراجع','sections':bounded});name='text-review.docx';mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
  if kind=='pdf':
   r=requests.post(os.environ['CONVERTER_URL'].rstrip('/')+'/convert',data=out.getvalue(),headers={'Authorization':'Bearer '+os.environ['CONVERTER_KEY'],'X-Format':'docx','X-Target':'pdf'},timeout=95);r.raise_for_status()
   if not r.content.startswith(b'%PDF'):raise ValueError('تعذر تجهيز PDF سليم. النتيجة محفوظة، جرب تاني أو اختار Word.')
