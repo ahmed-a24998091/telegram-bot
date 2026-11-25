@@ -7,10 +7,14 @@ MIME={'pdf':'application/pdf','docx':FORMATS['doc'][1],'xlsx':FORMATS['xls'][1],
 LOCK=threading.Lock()
 def target_of(text):
  t=(text or '').lower()
- # Target is normally after the last to/إلى/لـ marker, never the PDF source name.
- words=list(re.finditer(r'pdf|بي\s*دي\s*اف|docx|word|وورد|ورد|xlsx|excel|اكسل|إكسل|pptx|powerpoint|بوربوينت|بور\s*بوينت|csv',t))
- if not words:return ''
- v=words[-1].group();return 'pdf' if re.fullmatch(r'pdf|بي\s*دي\s*اف',v) else 'docx' if v in ('docx','word','وورد','ورد') else 'xlsx' if v in ('xlsx','excel','اكسل','إكسل') else 'csv' if v=='csv' else 'pptx'
+ aliases=r'pdf|بي\s*دي\s*اف|docx|word|وورد|ورد|xlsx|excel|اكسل|إكسل|إكسيل|اكسيل|pptx|powerpoint|بوربوينت|بور\s*بوينت|باوربوينت|باور\s*بوينت|csv'
+ # Prefer an explicit destination, not later mentions of the source format.
+ destinations=list(re.finditer(r'(?<!\w)(?:to\s+|into\s+|إلى\s*|الى\s*|لـ?\s*(?:ل|ال)?)(?:('+aliases+r'))(?!\w)',t))
+ words=list(re.finditer(r'(?<!\w)('+aliases+r')(?!\w)',t))
+ found=destinations or words
+ if not found:return ''
+ v=re.sub(r'\s+','',found[-1].group(1))
+ return 'pdf'if v in('pdf','بيدياف')else'docx'if v in('docx','word','وورد','ورد')else'xlsx'if v in('xlsx','excel','اكسل','إكسل','إكسيل','اكسيل')else'csv'if v=='csv'else'pptx'
 def convert_document(msg,target=''):
  doc=msg['document'];chat=msg['chat']['id'];name=doc.get('file_name','document');ext=name.rsplit('.',1)[-1].lower();target=target or FORMATS.get(ext,('',))[0]
  pairs={('pdf','xlsx'),('docx','xlsx'),('xlsx','docx'),('doc','docx'),('xls','xlsx'),('ppt','pptx'),('pdf','docx')}|{(s,'pdf') for s in ('doc','docx','xls','xlsx','ppt','pptx')}|{('xls','csv'),('xlsx','csv')}
