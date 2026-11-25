@@ -330,12 +330,50 @@ def geographic_place(place):
  note=d.get('note','').replace('توقيت العاصمة المسجلة، مش بالضرورة كل مناطق البلد.','المكان هو العاصمة المسجلة، مش البلد كله.').replace('توقيت المركز المسجّل للإقليم؛ الإقليم الكبير ممكن يكون فيه مناطق بتوقيت مختلف.','المكان هو مركز الإقليم المسجّل، مش كل مناطقه.')
  return d,note
 
+def weather_source_valid(data,place,now=None):
+ import datetime as dt,math
+ from zoneinfo import ZoneInfo
+ try:
+  if data['timezone']!=place['tz']:return False
+  latitude=float(data['latitude']);longitude=float(data['longitude'])
+  if not(math.isfinite(latitude)and math.isfinite(longitude)):return False
+  if abs(latitude-place['lat'])>0.5 or abs((longitude-place['lon']+180)%360-180)>0.5:return False
+  current=data['current'];units=data['current_units']
+  if any(units.get(key)!=unit for key,unit in(('temperature_2m','°C'),('relative_humidity_2m','%'),('wind_speed_10m','km/h'))):return False
+  stamp=dt.datetime.fromisoformat(current['time'])
+  if stamp.tzinfo is not None:return False
+  stamp=stamp.replace(tzinfo=ZoneInfo(place['tz']))
+  now=now or dt.datetime.now(dt.timezone.utc)
+  age=(now.astimezone(dt.timezone.utc)-stamp.astimezone(dt.timezone.utc)).total_seconds()
+  if not -1800<=age<=10800:return False
+  for key,low,high in(('temperature_2m',-100,70),('relative_humidity_2m',0,100),('wind_speed_10m',0,500)):
+   value=current[key]
+   if isinstance(value,bool)or not isinstance(value,(int,float))or not math.isfinite(value)or not low<=value<=high:return False
+  return True
+ except (KeyError,TypeError,ValueError,OverflowError):return False
+
 def global_weather(place):
  p,note=geographic_place(place)
  if p is None:return note
- d=api_get('https://api.open-meteo.com/v1/forecast',{'latitude':p['lat'],'longitude':p['lon'],'current':'temperature_2m,relative_humidity_2m,wind_speed_10m','timezone':p['tz']})
- c=d['current'];u=d.get('current_units',{})
- return 'طقس '+p['name']+'، '+p['cc']+'\nوقت بيانات المصدر: '+c['time']+' '+d.get('timezone',p['tz'])+'\nالحرارة '+str(c['temperature_2m'])+'°م، الرطوبة '+str(c['relative_humidity_2m'])+'٪، الرياح '+str(c['wind_speed_10m'])+' '+u.get('wind_speed_10m','km/h')+'\n'+note+'\nإحداثيات المصدر: '+str(p['lat'])+', '+str(p['lon'])+'\nالمصدر: https://open-meteo.com/ ؛ تحديد المكان GeoNames CC BY4.0. تقدير شبكة الطقس، مش قياس مباشر من مكانك. خدمة مجانية للاستخدام غير التجاري وممكن تتأخر أو تتوقف.'
+ d=api_get('https://api.open-meteo.com/v1/forecast',{'latitude':p['lat'],'longitude':p['lon'],'current':'temperature_2m,relative_humidity_2m,wind_speed_10m','timezone':p['tz'],'temperature_unit':'celsius','wind_speed_unit':'kmh'})
+ if not weather_source_valid(d,p):return 'مصدر الطقس رجّع بيانات قديمة أو غير مطابقة للمكان أو الوحدات. مش هعرضها كطقس حالي. جرّب لاحقاً.'
+ c=d['current'];u=d['current_units']
+ return 'طقس '+p['name']+'، '+p['cc']+'\nوقت بيانات المصدر: '+c['time']+' '+d['timezone']+'\nالحرارة '+str(c['temperature_2m'])+'°م، الرطوبة '+str(c['relative_humidity_2m'])+'٪، الرياح '+str(c['wind_speed_10m'])+' '+u['wind_speed_10m']+'\n'+note+'\nإحداثيات المصدر: '+str(d['latitude'])+', '+str(d['longitude'])+'\nالمصدر: https://open-meteo.com/ ؛ تحديد المكان GeoNames CC BY4.0. تقدير شبكة الطقس، مش قياس مباشر من مكانك. خدمة مجانية للاستخدام غير التجاري وممكن تتأخر أو تتوقف.'
+
+def prayer_source_valid(data,place,date,method):
+ import math
+ try:
+  if data.get('code')!=200:return False
+  payload=data['data'];meta=payload['meta'];tim=payload['timings']
+  if payload['date']['gregorian']['date']!=date or meta['timezone']!=place['tz']or meta['method']['id']!=method:return False
+  if meta['school']!='STANDARD'or meta['latitudeAdjustmentMethod']!='ANGLE_BASED':return False
+  for key in('latitude','longitude'):
+   value=float(meta[key])
+   if not math.isfinite(value)or abs(value-place['lat'if key=='latitude'else'lon'])>0.01:return False
+  for key in('Fajr','Sunrise','Dhuhr','Asr','Maghrib','Isha'):
+   if not isinstance(tim.get(key),str)or not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]',tim[key]):return False
+  return True
+ except (KeyError,TypeError,ValueError,OverflowError):return False
 
 def global_prayers(place,method=None):
  import datetime as dt
@@ -348,9 +386,8 @@ def global_prayers(place,method=None):
  date=dt.datetime.now(ZoneInfo(p['tz'])).strftime('%d-%m-%Y')
  url='https://api.aladhan.com/v1/timings/'+date
  d=api_get(url,{'latitude':p['lat'],'longitude':p['lon'],'method':method,'timezonestring':p['tz'],'school':0,'latitudeAdjustmentMethod':3})
- if d.get('code')!=200:raise ValueError('prayer api')
+ if not prayer_source_valid(d,p,date,method):return 'مصدر الصلاة مرجعش مواقيت مطابقة للمكان والتاريخ وطريقة الحساب المطلوبة. راجع جهة محلية، مش هخمن المواقيت.'
  data=d['data'];tim=data['timings'];meta=data['meta']
- if any(not re.match(r'^\d\d:\d\d',tim.get(k,''))for k in('Fajr','Dhuhr','Asr','Maghrib','Isha')):return 'مصدر الصلاة مرجعش مواقيت واضحة للمكان والتاريخ ده. راجع جهة محلية، مش هخمن.'
  lines=[('الفجر','Fajr'),('الشروق','Sunrise'),('الظهر','Dhuhr'),('العصر','Asr'),('المغرب','Maghrib'),('العشاء','Isha')]
  return 'مواقيت الصلاة المحسوبة لـ '+p['name']+'، '+p['cc']+'\n'+date+' | '+p['tz']+'\n'+'\n'.join(a+': '+tim[b]for a,b in lines)+'\nطريقة الحساب: '+str(meta['method'].get('name',method))+' ('+str(method)+')، العصر شافعي، تصحيح خطوط العرض العالية:زاوية.\n'+note+'\nإحداثيات: '+str(p['lat'])+', '+str(p['lon'])+'\nالمصدر: https://aladhan.com/prayer-times-api ؛ GeoNames CC BY4.0. مواقيت حسابية قد تختلف عن المسجد والجهة الرسمية، خصوصاً المناطق القطبية. لم أفعّل أي تنبيهات. لتغيير الطريقة: /prayer المكان | method=رقم'
 
