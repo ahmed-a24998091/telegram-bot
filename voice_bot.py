@@ -557,6 +557,19 @@ def study_word(text,title,source):
  for i in range(0,len(paragraphs),12):sections.append({'heading':'المحتوى'if i==0 else'تابع المحتوى','paragraphs':paragraphs[i:i+12]})
  return office_flow.word({'title':title,'sections':sections})
 
+def study_slide_lines(text):
+ lines=[]
+ for paragraph in text.split('\n'):
+  current=''
+  for word in paragraph.split():
+   if len(word)>70:
+    if current:lines.append(current);current=''
+    while len(word)>70:lines.append(word[:70]);word=word[70:]
+   if current and len(current)+1+len(word)>145:lines.append(current);current=word
+   else:current=(current+' '+word).strip()
+  if current:lines.append(current)
+ return lines
+
 def study_export(chat,state,kind):
  import io
  text=study_plain(state.get('result',''))
@@ -572,14 +585,7 @@ def study_export(chat,state,kind):
  else:
   # Native editable text. Split bounded lines, never shrink to unreadable microtext.
   from generate_bot import make_slides
-  lines=[]
-  for paragraph in text.split('\n'):
-   if not paragraph.strip():continue
-   words=paragraph.split();current=''
-   for w in words:
-    if len(current)+len(w)>145:lines.append(current);current=w
-    else:current=(current+' '+w).strip()
-   if current:lines.append(current)
+  lines=study_slide_lines(text)
   if len(lines)>24:bot.send(chat,'النص أطول من عرض الدراسة المحدود. اختار ملخص أقصر أو صدّر Word/PDF؛ لن أحذف المحتوى بصمت.');return
   slides=[{'title':title,'bullets':['مادة مولدة من المصدر المرسل','المصدر: '+source[:120],'راجع الدقة قبل الاعتماد'],'notes':'المصدر: '+source}]
   for i in range(0,len(lines),4):slides.append({'title':title+' | '+str(i//4+1),'bullets':lines[i:i+4],'notes':'المصدر: '+source})
