@@ -188,11 +188,11 @@ def build(chat,kind,source,request):
         import os,requests
         r=requests.post('https://api.groq.com/openai/v1/chat/completions',headers={'Authorization':'Bearer '+os.environ.get('GROQ_API_KEY','')},json={'model':bot.GROQ_MODEL,'messages':[{'role':'system','content':system},{'role':'user','content':json.dumps({'request':request,'source':source},ensure_ascii=False)}],'response_format':{'type':'json_object'},'temperature':0.1},timeout=35);r.raise_for_status();data=json.loads(r.json()['choices'][0]['message']['content'])
         if kind=='word':
-            links=list(dict.fromkeys(re.findall(r'https?://[^\s]+',source)))[:20]
+            links=list(dict.fromkeys(re.findall(r'https?://[^\s]+',source)))
             # Model schemas must never silently discard source provenance.
             if links:
                 sections=data.setdefault('sections',[])
-                provenance=([line for line in source.splitlines() if 'تم التحقق:' in line or 'ملخصات الناشرين' in line or re.search(r'\|.*(?:مساء|صباح)',line)][:12])+links
+                provenance=([line for line in source.splitlines() if 'تم التحقق:' in line or 'ملخصات الناشرين' in line or re.search(r'\|.*(?:مساء|صباح)',line)])+links
                 for start in range(0,len(provenance),12):
                     sections.append({'heading':'المصادر'if start==0 else'تابع المصادر','paragraphs':provenance[start:start+12]})
                 # Never claim source links survived when the builder would slice them.
