@@ -27,13 +27,19 @@ def docx_ordered_text(document):
             elif child.tag!=qn('w:pPr'):
                 parts.append(''.join(n.text or '' for n in child.iter(qn('w:t'))))
         return ''.join(parts)
+    def content_children(element,depth):
+        if depth>12:raise ValueError('تداخل محتوى Word أكبر من حد القراءة. ابعت نسخة أبسط أو نصاً منسوخاً.')
+        for child in element.iterchildren():
+            budget['blocks']+=1
+            if budget['blocks']>20000:raise ValueError('محتوى Word كبير للقراءة. قسمه لأجزاء.')
+            if child.tag in (qn('w:sdt'),qn('w:sdtContent'),qn('w:customXml')):
+                yield from content_children(child,depth+1)
+            else:yield child
     def blocks(parent,depth=0):
         if depth>12:raise ValueError('تداخل جداول Word أكبر من حد القراءة. ابعت نسخة أبسط أو نصاً منسوخاً.')
         element=parent.element.body if hasattr(parent,'element')and hasattr(parent.element,'body')else parent._tc
         parts=[]
-        for child in element.iterchildren():
-            budget['blocks']+=1
-            if budget['blocks']>20000:raise ValueError('محتوى Word كبير للقراءة. قسمه لأجزاء.')
+        for child in content_children(element,depth):
             if child.tag==qn('w:p'):
                 text=paragraph_text(child,parent)
                 budget['chars']+=len(text)
