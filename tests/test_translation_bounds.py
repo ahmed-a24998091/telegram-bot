@@ -4,10 +4,10 @@ from unittest.mock import patch
 
 class TranslationBounds(unittest.TestCase):
  def scope(self,name):
-  p=Path(__file__).resolve().parents[1]/'intent_bundle.py';node=next(n for n in ast.parse(p.read_text()).body if isinstance(n,ast.FunctionDef)and n.name==name);self.sent=[];self.calls=[]
+  p=Path(__file__).resolve().parents[1]/'intent_bundle.py';node=next(n for n in ast.parse(p.read_text()).body if isinstance(n,ast.FunctionDef)and n.name==name);self.sent=[];self.calls=[];owner=self;self.finish='stop'
   class Response:
    def raise_for_status(self):pass
-   def json(self):return {'choices':[{'message':{'content':'SYNTHETIC TRANSLATION'}}]}
+   def json(self):return {'choices':[{'finish_reason':owner.finish,'message':{'content':'SYNTHETIC TRANSLATION'}}]}
    def iter_content(self,*a):return iter([b'synthetic-image'])
   def post(*a,**k):self.calls.append(k['json']);return Response()
   self.requests=types.SimpleNamespace(post=post,get=lambda *a,**k:Response())
@@ -26,3 +26,14 @@ class TranslationBounds(unittest.TestCase):
   self.image('X'*18000+' END123');self.assertFalse(self.calls)
  def test_image_at_limit_is_whole(self):
   source='X'*17993+' END123';self.image(source);self.assertEqual(json.loads(self.calls[0]['messages'][1]['content'])['image_transcription'],source);self.assertEqual(self.sent[-1],'SYNTHETIC TRANSLATION')
+
+ def test_length_stopped_reply_never_sent_as_translation(self):
+  f=self.scope('translate_text');self.finish='length';f(1,'translate to Arabic','synthetic source');self.assertNotIn('SYNTHETIC TRANSLATION',self.sent);self.assertTrue(self.sent)
+ def test_missing_stop_reason_reply_never_sent_as_translation(self):
+  f=self.scope('translate_text');self.finish=None;f(1,'translate to Arabic','synthetic source');self.assertNotIn('SYNTHETIC TRANSLATION',self.sent)
+ def test_filtered_reply_never_sent_as_translation(self):
+  f=self.scope('translate_text');self.finish='content_filter';f(1,'translate to Arabic','synthetic source');self.assertNotIn('SYNTHETIC TRANSLATION',self.sent)
+ def test_length_stopped_image_never_sent_as_translation(self):
+  f=self.scope('translate_image');self.source='synthetic source';self.finish='length'
+  with patch.dict(sys.modules,{'requests':self.requests}):f({'chat':{'id':1},'photo':[{'file_id':'fixture','file_size':15}]},'translate to Arabic')
+  self.assertNotIn('SYNTHETIC TRANSLATION',self.sent);self.assertEqual(len(self.calls),1)
