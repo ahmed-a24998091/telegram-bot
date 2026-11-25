@@ -51,6 +51,8 @@ def docx_ordered_text(document):
                 if budget['chars']>300000:raise ValueError('نص Word كبير للقراءة. قسمه لأجزاء، لم أقتطع منه.')
                 parts.append(text)
             elif child.tag==qn('w:tbl'):
+                if any(node.getparent().tag!=qn('w:tbl') for node in child.iter(qn('w:tr'))) or any(node.getparent().tag!=qn('w:tr') for node in child.iter(qn('w:tc'))):
+                    raise ValueError('جدول Word فيه صفوف أو خلايا مغلفة غير مدعومة. ابعت نسخة مبسطة حتى لا تسقط بيانات من القراءة.')
                 table=Table(child,parent)
                 seen=set()
                 for row in table.rows:
