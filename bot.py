@@ -61,7 +61,9 @@ def ask_gemini(msgs):
             continue
         if r.status_code == 200:
             try:
-                return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                candidate=r.json()["candidates"][0]
+                if candidate.get("finishReason")!="STOP":raise ValueError("incomplete model response")
+                return candidate["content"]["parts"][0]["text"].strip()
             except Exception as e:
                 last = e
                 continue
@@ -77,7 +79,9 @@ def ask_groq(msgs):
                             [{"role": "user" if m["role"] == "user" else "assistant", "content": m["text"]} for m in msgs]},
                       timeout=12)
     r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"].strip()
+    choice=r.json()["choices"][0]
+    if choice.get("finish_reason")!="stop":raise ValueError("incomplete model response")
+    return choice["message"]["content"].strip()
 
 
 def ask_pollinations(msgs):
@@ -87,7 +91,9 @@ def ask_pollinations(msgs):
                             [{"role": "user" if m["role"] == "user" else "assistant", "content": m["text"]} for m in msgs]},
                       timeout=90)
     r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"].strip()
+    choice=r.json()["choices"][0]
+    if choice.get("finish_reason")!="stop":raise ValueError("incomplete model response")
+    return choice["message"]["content"].strip()
 
 
 def answer(chat_id, text):
@@ -121,7 +127,9 @@ def to_english_prompt(text):
                               json={"contents": [{"role": "user", "parts": [{"text":
                                     "Rewrite as a short vivid English image prompt. Output only the prompt:\n" + text}]}]})
             if r.status_code == 200:
-                return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                candidate=r.json()["candidates"][0]
+                if candidate.get("finishReason")!="STOP":raise ValueError("incomplete model response")
+                return candidate["content"]["parts"][0]["text"].strip()
         except Exception as e:
             print("translate_failed", flush=True)
     return text
