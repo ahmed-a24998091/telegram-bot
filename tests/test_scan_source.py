@@ -15,3 +15,7 @@ class ScanSourcePreservation(unittest.TestCase):
 class TableDimensionMetadata(unittest.TestCase):
  def test_reset_before_streaming_and_column_guard(self):
   source=base64.b64decode(re.findall(r'RUN echo (\S+) \| base64 -d > /app/table_worker.py',(Path(__file__).resolve().parents[1]/'converter.Dockerfile').read_text())[-1]).decode();ast.parse(source);self.assertIn('sh.reset_dimensions()',source);self.assertLess(source.index('sh.reset_dimensions()'),source.index('add(sh.title,sh.iter_rows'));self.assertIn("if len(values)>50:raise ValueError('table columns')",source)
+
+class WrappedTableSource(unittest.TestCase):
+ def test_wrapped_body_tables_and_nested_guard(self):
+  source=base64.b64decode(re.findall(r'RUN echo (\S+) \| base64 -d > /app/table_worker.py',(Path(__file__).resolve().parents[1]/'converter.Dockerfile').read_text())[-1]).decode();ast.parse(source);self.assertIn('body_tables(doc.element.body)',source);self.assertIn("qn('w:sdtContent')",source);self.assertIn("raise ValueError('nested tables need separate input')",source)
