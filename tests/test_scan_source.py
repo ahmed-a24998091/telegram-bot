@@ -23,3 +23,7 @@ class WrappedTableSource(unittest.TestCase):
 class WrappedCellSource(unittest.TestCase):
  def test_cell_controls_and_separators(self):
   source=base64.b64decode(re.findall(r'RUN echo (\S+) \| base64 -d > /app/table_worker.py',(Path(__file__).resolve().parents[1]/'converter.Dockerfile').read_text())[-1]).decode();tree=ast.parse(source);self.assertIn('cell_text(c)',source);self.assertIn("qn('w:tab')",source);self.assertIn("qn('w:br')",source);self.assertIn("raise ValueError('cell wrapper depth')",source)
+
+class WrappedTableStructure(unittest.TestCase):
+ def test_structural_wrappers_refused(self):
+  source=base64.b64decode(re.findall(r'RUN echo (\S+) \| base64 -d > /app/table_worker.py',(Path(__file__).resolve().parents[1]/'converter.Dockerfile').read_text())[-1]).decode();ast.parse(source);self.assertIn("raise ValueError('wrapped rows or cells need separate input')",source);self.assertIn("node.getparent().tag!=qn('w:tbl')",source);self.assertIn("node.getparent().tag!=qn('w:tr')",source)
