@@ -146,7 +146,11 @@ def build(chat,kind,source,request):
             # Model schemas must never silently discard source provenance.
             if links:
                 sections=data.setdefault('sections',[])
-                sections.append({'heading':'المصادر','paragraphs':([line for line in source.splitlines() if 'تم التحقق:' in line or 'ملخصات الناشرين' in line or re.search(r'\|.*(?:مساء|صباح)',line)][:12])+links})
+                provenance=([line for line in source.splitlines() if 'تم التحقق:' in line or 'ملخصات الناشرين' in line or re.search(r'\|.*(?:مساء|صباح)',line)][:12])+links
+                for start in range(0,len(provenance),12):
+                    sections.append({'heading':'المصادر'if start==0 else'تابع المصادر','paragraphs':provenance[start:start+12]})
+                # Never claim source links survived when the builder would slice them.
+                if len(sections)>20:raise ValueError('source appendix exceeds section limit')
         stream=word(data) if kind=='word' else excel(data) if kind=='excel' else slides(G.parse_data(json.dumps(data),kind))
         name={'word':'document.docx','excel':'workbook.xlsx','slides':'presentation.pptx'}[kind]
         result=bot.tg('sendDocument',data={'chat_id':chat},files={'document':(name,stream,'application/octet-stream')})
