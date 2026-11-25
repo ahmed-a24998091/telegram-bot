@@ -851,6 +851,25 @@ bot.handle=voice_current_help
 # Text review, NOT an AI detector. Every finding is tied to exact supplied text.
 REVIEW_STATE={};REVIEW_LOCK=threading.BoundedSemaphore(1)
 
+def reference_doi_candidate(value):
+ """Extract a candidate, not proof of registration. Preserve balanced suffixes."""
+ from urllib.parse import unquote
+ value=unquote(value.strip())
+ value=re.sub(r'^(?:https?://(?:dx\.)?doi\.org/|doi\s*:\s*)','',value,flags=re.I)
+ value=value.rstrip('.,;،؛')
+ pairs={')':'(',']':'[','}':'{','>':'<'}
+ while value and value[-1]in pairs and value.count(value[-1])>value.count(pairs[value[-1]]):
+  value=value[:-1].rstrip('.,;،؛')
+ if not re.fullmatch(r'10\.\d{4,9}/[^\s"«»]{1,180}',value):return None
+ return value
+
+def reference_doi_candidates(text):
+ out=[];seen=set()
+ for raw in re.findall(r'10\.\d{4,9}/[^\s"«»]+',text,re.I):
+  value=reference_doi_candidate(raw)
+  if value and value.casefold()not in seen:out.append(value);seen.add(value.casefold())
+ return out
+
 def review_doi(doi):
  global CROSSREF_NEXT
  from urllib.parse import quote
@@ -884,10 +903,7 @@ def review_analyze(text,source,comparison=None):
  if not findings:out.append('لم تلتقط القواعد المحدودة مقاطع من الأنواع المحددة. هذا لا يعني خلو النص من الأخطاء أو إثباتاً أنه بشري أو آلي.')
  for i,(label,reason,p)in enumerate(findings[:16],1):out.extend([str(i)+'. '+label,'المقطع الحرفي: '+p[:1000]+(' [عرض مقتطف، المقطع أطول]'if len(p)>1000 else''),'سبب المراجعة: '+reason])
  if len(findings)>16:out.append('عدد المقاطع المرشحة أكبر؛ عرض أول16مقطعاً. ليست مراجعة شاملة لكل عبارة.')
- dois=[]
- for value in re.findall(r'10\.\d{4,9}/[^\s<>"«»]+',text,re.I):
-  value=value.rstrip('.,;،؛)\]')
-  if value not in dois:dois.append(value)
+ dois=reference_doi_candidates(text)
  out.append('فحص وجود المراجع')
  if not dois:out.append('لم أجد DOI صريحاً في النص. المراجع بأسماء أو عناوين فقط لم يتم التحقق منها. غياب DOI ليس دليلاً على عدم وجود المرجع.')
  for doi in dois[:5]:
@@ -1025,8 +1041,8 @@ def academic_request(msg):
   STUDY_STATE[chat]={'awaiting':True,'academic':True,'time':time.monotonic()}
   bot.send(chat,'ابعت نص بحثك أو ملف PDF نصي/DOCX/PPTX/XLSX أقل من٨ميجابايت وحتى٢٤ألف حرف. سنفصل النص الفعلي عن المقترحات. لا أقرأ الصور أو المراجع الخارجية تلقائياً. للتحقق من سجل DOI ابعت /doi ثم المعرف. /cancel للإلغاء.');return True
  if text.startswith('/doi '):
-  value=text[5:].strip();value=re.sub(r'^https?://(?:dx\.)?doi\.org/','',value,flags=re.I)
-  if not re.fullmatch(r'10\.\d{4,9}/[^\s]{1,180}',value):bot.send(chat,'ابعت DOI صحيح مثل 10.1038/nature12373، بدون روابط أخرى.');return True
+  value=reference_doi_candidate(text[5:])
+  if not value:bot.send(chat,'ابعت DOI واضحاً أو رابط doi.org بدون نص إضافي. مثال: 10.1038/nature12373');return True
   try:
    from urllib.parse import quote
    with CROSSREF_LOCK:
