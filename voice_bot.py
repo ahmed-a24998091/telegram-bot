@@ -554,7 +554,7 @@ def study_word(text,title,source):
   if raw.strip():paragraphs.append(raw.strip())
  if len(paragraphs)>200:raise ValueError('النص أطول من حد التصدير، قسمه لأجزاء.')
  sections=[{'heading':'المصدر وحدود القراءة','paragraphs':[source,'مادة دراسية مولدة من المصدر المرسل. راجعها قبل الاعتماد، لا تشمل الصور أو قراءة المراجع الخارجية.']}]
- for i in range(0,len(paragraphs),10):sections.append({'heading':'المحتوى'if i==0 else'تابع المحتوى','paragraphs':paragraphs[i:i+10]})
+ for i in range(0,len(paragraphs),12):sections.append({'heading':'المحتوى'if i==0 else'تابع المحتوى','paragraphs':paragraphs[i:i+12]})
  return office_flow.word({'title':title,'sections':sections})
 
 def study_export(chat,state,kind):
