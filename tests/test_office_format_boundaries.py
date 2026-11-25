@@ -10,3 +10,8 @@ class OfficeFormatBoundaries(unittest.TestCase):
   for kind,texts in {'word':['اعمل وورد','ملف ورد','/word fixture','output.docx','WORD'],'excel':['اكسل','إكسيل','/excel fixture','output.xlsx','EXCEL'],'slides':['اعمل باور بوينت','بوربوينت','/slides fixture','output.pptx','POWERPOINT']}.items():
    for text in texts:
     with self.subTest(text=text):self.assertEqual(self.classify(text),kind)
+
+ def test_attached_arabic_prefixes(self):
+  for kind,texts in {'word':['حول النص للوورد','الملف الوورد','اعمله بالوورد'],'excel':['اعمل الملف بالاكسل','حوله للاكسل','والإكسيل'],'slides':['حولها للباوربوينت','اعملها بالبوربوينت','والباور بوينت']}.items():
+   for text in texts:
+    with self.subTest(text=text):self.assertEqual(self.classify(text),kind)
