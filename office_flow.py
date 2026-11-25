@@ -171,9 +171,9 @@ def slides(data):
 
 
 def kind_of(text):
-    if re.search(r'/word\b|وورد|ملف\s+ورد|مستند\s+ورد|\bword\b|docx',text,re.I):return 'word'
-    if re.search(r'/excel\b|اكسل|إكسل|إكسيل|اكسيل|excel|xlsx',text,re.I):return 'excel'
-    if re.search(r'/slides\b|بوربوينت|بور بوينت|باوربوينت|باور بوينت|powerpoint|pptx',text,re.I):return 'slides'
+    if re.search(r'/word\b|(?<!\w)(?:وورد|ملف\s+ورد|مستند\s+ورد|word|docx)(?!\w)',text,re.I):return 'word'
+    if re.search(r'/excel\b|(?<!\w)(?:اكسل|إكسل|إكسيل|اكسيل|excel|xlsx)(?!\w)',text,re.I):return 'excel'
+    if re.search(r'/slides\b|(?<!\w)(?:بوربوينت|بور بوينت|باوربوينت|باور بوينت|powerpoint|pptx)(?!\w)',text,re.I):return 'slides'
     return None
 
 
