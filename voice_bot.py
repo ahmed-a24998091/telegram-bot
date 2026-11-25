@@ -1776,6 +1776,13 @@ def transient_cleanup_loop():
   try:transient_sweep()
   except Exception:print('transient_cleanup_failed',flush=True)
 
+TEXT_CHECK_SECTION_TITLE='فحص النصوص ومؤشراتها'
+TEXT_CHECK_SECTION_LIMITS='فحص تحريري وبحثي بقواعد محدودة ومقترحات منفصلة. لا يحدد أن الكاتب استخدم AI، ولا نسبة AI أو انتحال أو حكم أصالة. Crossref يتحقق من سجل المرجع فقط، لا صحة النتائج.'
+MENU_SECTIONS['textchecks']=(TEXT_CHECK_SECTION_TITLE+'\n'+TEXT_CHECK_SECTION_LIMITS,[('تقرير فحص النص والمراجع','task:reviewnew'),('مراجعة لغوية بمقترحات منفصلة','task:proofnew'),('مقارنة نصين مقدمين منك','task:reviewcompare_help'),('ملف مصادر ومقتطفات','task:research'),('سجلات المراجع DOI','task:papers'),('التحقق من معرف DOI','task:doi_help')])
+MENU_TASKS['reviewcompare_help']='ابدأ /reviewnew وابعت النص الأول. بعد التقرير ابعت /reviewcompare ثم النص الثاني. مقارنة حرفية لسلاسل8كلمات فقط بين النصين اللذين قدمتهما؛ لا بحث ويب ولا نسبة انتحال ولا كشف إعادة صياغة.'
+MENU_SECTIONS['menu'][1].insert(2,(TEXT_CHECK_SECTION_TITLE,'textchecks'))
+MENU_SECTIONS['academic']=(MENU_SECTIONS['academic'][0],[(label,target)for label,target in MENU_SECTIONS['academic'][1]if target not in ('task:reviewnew','task:proofnew')]+[(TEXT_CHECK_SECTION_TITLE,'textchecks')])
+
 if __name__=='__main__':
     initialize_menu()
     conversion_bot.finish_bot.EXTRA.init_reminders()
