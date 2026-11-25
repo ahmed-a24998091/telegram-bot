@@ -123,3 +123,17 @@ class InlineControls(unittest.TestCase):
         d=Document();p=d.add_paragraph();node=p.add_run('DEEP')._r
         for _ in range(14):wrapper=OxmlElement('w:sdt');node.addprevious(wrapper);wrapper.append(node);node=wrapper
         with self.assertRaises(ValueError):self.extract(d)
+
+
+class DocxTableStructureTests(DocxOrderTests):
+    def test_wrapped_row_refused_instead_of_partial_text(self):
+        from docx.oxml import OxmlElement
+        d=Document();t=d.add_table(rows=2,cols=1);t.cell(0,0).text='FIRST';t.cell(1,0).text='LAST END123'
+        row=t.rows[-1]._tr;wrap=OxmlElement('w:sdt');content=OxmlElement('w:sdtContent');wrap.append(content);row.addprevious(wrap);content.append(row)
+        with self.assertRaisesRegex(ValueError,'Word'):self.extract(d)
+
+    def test_wrapped_cell_refused_instead_of_partial_text(self):
+        from docx.oxml import OxmlElement
+        d=Document();t=d.add_table(rows=1,cols=2);t.cell(0,0).text='FIRST';t.cell(0,1).text='LAST END123'
+        cell=t.cell(0,1)._tc;wrap=OxmlElement('w:customXml');cell.addprevious(wrap);wrap.append(cell)
+        with self.assertRaisesRegex(ValueError,'Word'):self.extract(d)
