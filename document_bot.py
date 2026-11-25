@@ -28,8 +28,9 @@ def docx_ordered_text(document):
                 parts.append(text)
             elif child.tag==qn('w:tbl'):
                 table=Table(child,parent)
+                seen=set()
                 for row in table.rows:
-                    cells=[];seen=set()
+                    cells=[]
                     for cell in row.cells:
                         if cell._tc in seen:continue
                         seen.add(cell._tc)
