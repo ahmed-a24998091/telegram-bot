@@ -20,7 +20,6 @@ SYSTEM = ("انت مساعد شخصي ذكي اسمه 'مساعد أحمد'، ب
           "افتكر اللي اتقال في المحادثة وكمّل عليه ومتسألش نفس السؤال مرتين. لو الرسالة قصيرة أو مش واضحة (زي 'اه' أو 'اسمها') اربطها بآخر كلام في المحادثة وكمّل عليه، ولو لسه مش واضح اسأل سؤال واحد بس. "
           "أنت تعرف وصف آخر صورة من سجل المحادثة لكن مش شايف الصورة نفسها. لو المستخدم اشتكى من الصورة اعتذر باختصار واطلب التعديل المطلوب من غير ما تدعي إنك فحصتها. متخترعش روابط أو مرفقات، ومتقولش إنك بعت صورة. لو مش عارف قول بصراحة. طلبات الصور بتتفهم باللغة الطبيعية ومش محتاجة كلمة معينة. لو الطلب ناقص اسأل عن التفصيلة الناقصة فقط. الفيديو مش متاح.")
 API = "https://api.telegram.org/bot%s/" % TELEGRAM_TOKEN
-chat_locks = {}
 history = {}          # chat_id -> قايمة رسايل
 last_image = {}       # chat_id -> وقت آخر صورة (عشان نلتزم بحد Pollinations)
 image_lock = threading.Lock()
@@ -381,13 +380,48 @@ def handle(msg):
         send(chat_id, answer(chat_id, text))
 
 
-def safe_handle(msg):
-    try:
-        with chat_locks.setdefault(msg["chat"]["id"], threading.Lock()):
-            handle(msg)
-    except Exception as e:
-        print("handler_failed", flush=True)
+class ChatLockRegistry:
+    """Keep one lock per active/waiting chat, remove only after last user."""
+    def __init__(self):
+        self.guard = threading.Lock()
+        self.entries = {}
 
+    def enter(self, chat):
+        with self.guard:
+            entry = self.entries.get(chat)
+            if entry is None:
+                entry = [threading.Lock(), 0]
+                self.entries[chat] = entry
+            entry[1] += 1
+        try:
+            entry[0].acquire()
+        except BaseException:
+            self._drop(chat, entry)
+            raise
+        return entry
+
+    def _drop(self, chat, entry):
+        with self.guard:
+            entry[1] -= 1
+            if entry[1] == 0 and self.entries.get(chat) is entry:
+                self.entries.pop(chat)
+
+    def leave(self, chat, entry):
+        entry[0].release()
+        self._drop(chat, entry)
+
+
+CHAT_LOCKS = ChatLockRegistry()
+
+def safe_handle(msg):
+    chat = msg['chat']['id']
+    entry = CHAT_LOCKS.enter(chat)
+    try:
+        handle(msg)
+    except Exception:
+        print('handler_failed', flush=True)
+    finally:
+        CHAT_LOCKS.leave(chat, entry)
 
 class Ping(BaseHTTPRequestHandler):
     def do_GET(self):
