@@ -719,7 +719,7 @@ def study_extract(data,name):
   if formulas:notes.append('[يوجد '+str(formulas)+' معادلة: أعرض الصيغة فقط، لم أحسب نتائجها أو أقرأ نتائج مخزنة.]')
   if errors:notes.append('[يوجد '+str(errors)+' خلية بها خطأ في الملف الأصلي؛ ليست نتيجة رقمية صحيحة.]')
   result='\n'.join(notes+parts)
- if len(re.sub(r'\[[^]]+\]','',result).strip())<35:raise ValueError('مفيش نص كافي. الصور والرسوم لا تقرأ في هذه الجلسة.')
+ # Actual source length was validated inside each format branch.
  return result
 
 
