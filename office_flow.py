@@ -241,7 +241,7 @@ def handle(msg):
     if re.search(r'بتعرف|تقدر|عندك|مميزات|ميزات|does|can you',text,re.I) and not re.search(r'اعمل|ابعت|حط|جهز|create|make|send',text,re.I):
         bot.send(chat,'أقدر أجهز ملفات Word وExcel وPowerPoint وأبعتها مرفقات. ابعت المحتوى وحدد الصيغة.');return
     if re.search(r'مش (?:بيفتح|شغال)|ليه|مشكلة|يعني ايه|ما هو|what is',text,re.I) and not re.search(r'اعمل|اعملي|جهز|ابعت|حط|حول|حوّل|انشئ|أنشئ|create|make|send',text,re.I):return ORIGINAL(msg)
-    source=source_text(chat,msg) if (msg.get('reply_to_message') or re.search(r'الكلام ده|النص ده|ده|دي|السابق|اللي فات|اعملها|حطها|ابعتها|it|this',text,re.I)) else ''
+    source=source_text(chat,msg) if (msg.get('reply_to_message') or re.search(r'(?<!\w)(?:الكلام ده|النص ده|ده|دي|السابق|اللي فات|اعملها|حطها|ابعتها|it|this)(?!\w)',text,re.I)) else ''
     media=msg if (msg.get('photo') or msg.get('voice') or msg.get('audio') or msg.get('document')) else msg.get('reply_to_message',{})
     if media.get('photo') or media.get('voice') or media.get('audio') or media.get('document'):
         try:
