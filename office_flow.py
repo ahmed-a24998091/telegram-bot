@@ -16,7 +16,7 @@ LAST={}
 LOCK=threading.BoundedSemaphore(2)
 
 def remember_send(chat,text):
-    if len(str(text))>35 and not str(text).startswith(('جاري','مقدرتش')):LAST[chat]=(time.monotonic(),str(text)[:16000])
+    if len(str(text))>35 and not str(text).startswith(('جاري','مقدرتش')):LAST[chat]=(time.monotonic(),str(text)[:18001]) # One extra character preserves overflow for build refusal.
     return SEND(chat,text)
 
 bot.send=remember_send
