@@ -388,19 +388,33 @@ def currency_request(text):
     return None
 
 def currency_convert(amount,source,target):
-    from decimal import Decimal,localcontext
+    from decimal import Decimal,localcontext,InvalidOperation,ROUND_HALF_UP
     if not amount:return 'اكتب /fx 100 USD EGP أو حول 100 دولار إلى جنيه. أسعار مرجعية يومية، مش عرض بيع وشراء.'
-    source=source.upper();target=target.upper();value=Decimal(amount)
-    if not value.is_finite()or value<0 or value>Decimal('1000000000000'):return 'استخدم مبلغ موجب أقل من تريليون.'
+    raw=str(amount)
+    if len(raw)>120 or not re.fullmatch(r'[0-9]+(?:\.[0-9]+)?',raw):return 'استخدم مبلغاً عشرياً عادياً بدون صيغة أسية أو فواصل آلاف.'
+    try:value=Decimal(raw)
+    except InvalidOperation:return 'اكتب مبلغاً رقمياً واضحاً.'
+    if not value.is_finite()or not 0<value<=Decimal('1000000000000'):return 'استخدم مبلغاً أكبر من صفر ولا يزيد على تريليون.'
+    digits=list(value.as_tuple().digits);exponent=value.as_tuple().exponent
+    while digits and digits[-1]==0:digits.pop();exponent+=1
+    if len(digits)>15 or exponent < -6:return 'دقة المبلغ المدعومة حتى6منازل عشرية و15رقماً مؤثراً. قلل الدقة بنفسك وأعد الإرسال، لم أغير مبلغك.'
+    source=source.upper();target=target.upper()
     if not re.fullmatch('[A-Z]{3}',source)or not re.fullmatch('[A-Z]{3}',target):return 'استخدم كود العملة من3حروف، مثلاً USD EGP SAR EUR.'
     if source not in FX_CACHE or time.monotonic()-FX_CACHE[source][0]>3600:
         r=requests.get('https://open.er-api.com/v6/latest/'+source,timeout=12);r.raise_for_status();data=r.json()
         if data.get('result')!='success'or data.get('base_code')!=source:raise ValueError('source')
         FX_CACHE[source]=(time.monotonic(),data)
-    data=FX_CACHE[source][1];updated=dt.datetime.fromtimestamp(int(data['time_last_update_unix']),TZ);now=dt.datetime.now(TZ)
+    data=FX_CACHE[source][1]
+    if isinstance(data['time_last_update_unix'],bool):raise ValueError('invalid source time')
+    updated=dt.datetime.fromtimestamp(int(data['time_last_update_unix']),TZ);now=dt.datetime.now(TZ)
     if updated>now or now-updated>dt.timedelta(hours=48):raise ValueError('stale')
-    rate=Decimal(str(data['rates'].get(target,'NaN')))
+    raw_rate=data['rates'].get(target)
+    if isinstance(raw_rate,bool):raise ValueError('invalid source rate')
+    rate=Decimal(str(raw_rate))if raw_rate is not None else Decimal('NaN')
     if not rate.is_finite()or rate<=0:return 'كود العملة غير مدعوم من المصدر. استخدم ISO مثل USD وEGP.'
+    if rate>Decimal('1000000000000')or rate<Decimal('0.000000000001')or len(rate.as_tuple().digits)>20:raise ValueError('invalid source rate')
     with localcontext() as ctx:
-        ctx.prec=32;result=value*rate
-    return f'{value:,.2f} {source} ≈ {result:,.2f} {target}\nسعر مرجعي: 1 {source} = {rate} {target}\nوقت بيانات المصدر: {updated:%Y-%m-%d %H:%M} القاهرة\nتحديث يومي تقريبي، مش سعر بنك بيع أو شراء ولا شامل رسوم. لا ينفّذ تحويل أموال.\nالمصدر: https://www.exchangerate-api.com/'
+        ctx.prec=48;result=value*rate;rounded=result.quantize(Decimal('0.000001'),rounding=ROUND_HALF_UP)
+    amount_text=format(value,'f').rstrip('0').rstrip('.')if '.'in format(value,'f')else format(value,'f')
+    estimate=format(rounded,'f').rstrip('0').rstrip('.')if rounded else 'أقل من 0.000001'
+    return f'{amount_text} {source} ≈ {estimate} {target}\nسعر مرجعي: 1 {source} = {rate} {target}\nوقت بيانات المصدر: {updated:%Y-%m-%d %H:%M} القاهرة\nالمبلغ المدخل محفوظ عددياً، والنتيجة تقدير مقرب حتى6منازل عشرية، مش تحديداً لوحدات العملة الصغرى.\nتحديث يومي تقريبي، مش سعر بنك بيع أو شراء ولا شامل رسوم. لا ينفّذ تحويل أموال.\nالمصدر: https://www.exchangerate-api.com/'
