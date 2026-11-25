@@ -305,8 +305,8 @@ def source_request(msg):
   if text==cmd or text.startswith(cmd+' '):
    if time.monotonic()-SOURCE_LAST.get(chat,-10000)<15:bot.send(chat,'استنى١٥ثانية بين طلبات البحث عشان حدود الخدمات المجانية.');return True
    if not SOURCE_LOCK.acquire(False):bot.send(chat,'فيه بحث شغال. جرّب بعد دقيقة.');return True
-   SOURCE_LAST[chat]=time.monotonic();bot.send(chat,'جاري البحث في المصادر المتاحة')
    try:
+    SOURCE_LAST[chat]=time.monotonic();bot.send(chat,'جاري البحث في المصادر المتاحة')
     result=discovery(text[len(cmd):],mode)
     if mode!='images'and 'المصادر:'in result:
      SOURCE_DOSSIERS[chat]={'time':time.monotonic(),'text':result}
