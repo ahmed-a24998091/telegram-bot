@@ -1371,9 +1371,12 @@ STUDY_ACTIONS.update({'pack':'مراجعة مقتطفات','packword':'Word لل
 def pack_source_lines(text):
  if len(text)>6000:raise ValueError('حزمة المراجعة تقبل حتى6000حرف. قسم المصدر، لن أحذف الباقي بصمت.')
  spans=[]
- for match in re.finditer(r'[^\n.!?؟。]+(?:[.!?؟。]|$)',text):
-  value=match.group().strip()
-  if 30<=len(value)<=700:spans.append(value)
+ for line in text.splitlines():
+  # A decimal point or URL dot is not a sentence boundary. Newlines
+  # end a source span even without final punctuation.
+  for value in re.split(r'(?<=[.!?؟。])\s+',line):
+   value=value.strip()
+   if 30<=len(value)<=700:spans.append(value)
  if not spans:raise ValueError('لم أجد جملاً متوسطة الطول للمراجعة. ابعت نصاً واضحاً بفواصل ونقاط، لا جدولاً أو عناوين فقط.')
  if len(spans)>40:raise ValueError('جمل كثيرة، ابعت جزءاً أصغر للحزمة.')
  return spans
