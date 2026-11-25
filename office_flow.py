@@ -69,7 +69,7 @@ def word(data):
         if s.get('heading'):d.add_heading(G.clean(s['heading'],120),1)
         for text in s.get('paragraphs',[])[:12]:d.add_paragraph(G.clean(text,1600))
         headers=s.get('headers',[]);rows=s.get('rows',[])
-        if rows:
+        if headers or rows:
             cols=min(6,len(headers) or len(rows[0]));t=d.add_table(rows=0,cols=cols);t.style='Table Grid'
             t._tbl.tblPr.append(OxmlElement('w:bidiVisual'))
             for i,row in enumerate(([headers] if headers else [])+rows[:50]):
