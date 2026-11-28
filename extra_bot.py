@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import bot
 import document_bot
 import memory_bot
-from live_sources import article_text, youtube_text, fresh_headlines, weather
+from live_sources import article_text, youtube_text, fresh_headlines, weather, geo_place
 
 STORE = memory_bot.STORE
 ORIGINAL = bot.handle
@@ -32,6 +32,11 @@ def init_reminders():
         c.execute("ALTER TABLE bot_reminders ADD COLUMN IF NOT EXISTS recurrence TEXT")
         c.execute("CREATE TABLE IF NOT EXISTS bot_price_alerts(id BIGSERIAL PRIMARY KEY,chat_id BIGINT NOT NULL,asset TEXT NOT NULL,direction TEXT NOT NULL,threshold NUMERIC NOT NULL,active BOOLEAN NOT NULL DEFAULT FALSE)")
         c.execute("CREATE TABLE IF NOT EXISTS bot_prayer_alerts(chat_id BIGINT PRIMARY KEY, minutes INTEGER NOT NULL, active BOOLEAN NOT NULL DEFAULT FALSE, generated_day TEXT)")
+        c.execute("ALTER TABLE bot_prayer_alerts ADD COLUMN IF NOT EXISTS city TEXT")
+        c.execute("ALTER TABLE bot_prayer_alerts ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION")
+        c.execute("ALTER TABLE bot_prayer_alerts ADD COLUMN IF NOT EXISTS lon DOUBLE PRECISION")
+        c.execute("ALTER TABLE bot_prayer_alerts ADD COLUMN IF NOT EXISTS tz TEXT")
+        c.execute("ALTER TABLE bot_prayer_alerts ADD COLUMN IF NOT EXISTS method INTEGER")
 
 
 
@@ -91,23 +96,34 @@ def handle(msg):
             with STORE.connect() as c:row=c.execute("UPDATE bot_price_alerts SET active=TRUE WHERE chat_id=%s AND id=%s AND active=FALSE RETURNING id",(chat,rid)).fetchone()
             bot.send(chat,'اتفعّل التنبيه مرة واحدة. المراجعة كل١٥دقيقة أثناء تشغيل البوت وقد تتأخر.'if row else'مفيش تنبيه منتظر تأكيد بالرقم ده.');return
         if text.startswith('/prayer_alerts'):
-            parts=text.split()
+            parts=text.split(maxsplit=2)
             if len(parts)==2 and parts[1]=='off':
                 with STORE.connect() as c:
                     c.execute("DELETE FROM bot_prayer_alerts WHERE chat_id=%s",(chat,))
                     c.execute("DELETE FROM bot_reminders WHERE chat_id=%s AND recurrence='prayer'",(chat,))
                 bot.send(chat,'وقفت تنبيهات الصلاة ومسحت التنبيهات المنتظرة.');return
-            if len(parts)==2 and parts[1].isdigit() and 1<=int(parts[1])<=60:
-                minutes=int(parts[1])
+            if len(parts)>=2 and parts[1].isdigit() and 1<=int(parts[1])<=60:
+                minutes=int(parts[1]);label='القاهرة';geo=None;method=5
+                if len(parts)==3 and parts[2].strip():
+                    try:geo,gnote=geo_place(parts[2].strip()[:80])
+                    except Exception:bot.send(chat,'خدمة الإحداثيات مش متاحة دلوقتي. جرّب بعد شوية أو احذف اسم المدينة للقاهرة.');return
+                    if geo is None:bot.send(chat,gnote);return
+                    if geo['cc']=='EG':method=5
+                    elif geo['cc']=='SA':method=4
+                    else:method=3
+                    label=geo['name']+'، '+geo['cc']
                 with STORE.connect() as c:
-                    c.execute("INSERT INTO bot_prayer_alerts(chat_id,minutes,active) VALUES (%s,%s,FALSE) ON CONFLICT(chat_id) DO UPDATE SET minutes=EXCLUDED.minutes,active=FALSE,generated_day=NULL",(chat,minutes))
+                    if geo is None:
+                        c.execute("INSERT INTO bot_prayer_alerts(chat_id,minutes,active,city,lat,lon,tz,method) VALUES (%s,%s,FALSE,NULL,NULL,NULL,NULL,NULL) ON CONFLICT(chat_id) DO UPDATE SET minutes=EXCLUDED.minutes,active=FALSE,generated_day=NULL,city=NULL,lat=NULL,lon=NULL,tz=NULL,method=NULL",(chat,minutes))
+                    else:
+                        c.execute("INSERT INTO bot_prayer_alerts(chat_id,minutes,active,city,lat,lon,tz,method) VALUES (%s,%s,FALSE,%s,%s,%s,%s,%s) ON CONFLICT(chat_id) DO UPDATE SET minutes=EXCLUDED.minutes,active=FALSE,generated_day=NULL,city=EXCLUDED.city,lat=EXCLUDED.lat,lon=EXCLUDED.lon,tz=EXCLUDED.tz,method=EXCLUDED.method",(chat,minutes,label,geo['lat'],geo['lon'],geo['tz'],method))
                     c.execute("DELETE FROM bot_reminders WHERE chat_id=%s AND recurrence='prayer'",(chat,))
-                bot.send(chat,f'اقتراح: تنبيه يومي قبل الصلوات الخمس بـ{minutes} دقيقة، للقاهرة فقط بتوقيت القاهرة. الحساب بطريقة الهيئة المصرية للمساحة من AlAdhan وقد يختلف دقائق عن المسجد. الاستضافة المجانية ممكن تتأخر أو تفوّت تنبيه، مش بديل لمنبه الأذان. للتفعيل ابعت /prayer_confirm وللإلغاء /prayer_alerts off');return
-            bot.send(chat,'تنبيهات الصلاة اختيارية وغير مفعلة تلقائياً. للقاهرة فقط: /prayer_alerts 10 لعرض تنبيه قبل الأذان بعشر دقائق وتأكيده. /prayer_alerts off للإيقاف.');return
+                bot.send(chat,f'اقتراح: تنبيه يومي قبل الصلوات الخمس بـ{minutes} دقيقة لـ {label}. الحساب بطريقة رقم {method} من AlAdhan بتوقيت المدينة وقد يختلف دقائق عن المسجد المحلي. الاستضافة المجانية ممكن تتأخر أو تفوّت تنبيه، مش بديل لمنبه الأذان. للتفعيل ابعت /prayer_confirm وللإلغاء /prayer_alerts off');return
+            bot.send(chat,'تنبيهات الصلاة اختيارية وغير مفعلة تلقائياً. للقاهرة /prayer_alerts 10 أو لأي مدينة مثلاً /prayer_alerts 10 Dubai, UAE لعرض تنبيه قبل الأذان بعشر دقائق وتأكيده. /prayer_alerts off للإيقاف.');return
         if text=='/prayer_confirm':
             with STORE.connect() as c:
-                row=c.execute("UPDATE bot_prayer_alerts SET active=TRUE WHERE chat_id=%s AND active=FALSE RETURNING minutes",(chat,)).fetchone()
-            bot.send(chat,'اتفعّلت تنبيهات القاهرة. ممكن تتأخر على الاستضافة المجانية. للإيقاف /prayer_alerts off' if row else 'مفيش إعداد منتظر تأكيد. ابعت /prayer_alerts 10 الأول.');return
+                row=c.execute("UPDATE bot_prayer_alerts SET active=TRUE WHERE chat_id=%s AND active=FALSE RETURNING minutes,COALESCE(city,'القاهرة')",(chat,)).fetchone()
+            bot.send(chat,'اتفعّلت تنبيهات '+row[1]+' قبل كل صلاة بـ'+str(row[0])+' دقيقة. ممكن تتأخر على الاستضافة المجانية. للإيقاف /prayer_alerts off' if row else 'مفيش إعداد منتظر تأكيد. ابعت /prayer_alerts 10 الأول.');return
         if text == '/time'  or re.search(r'(?:النهارده|النهاردة|انهارده|اليوم|الساعة|الساعه|تاريخ).*(?:ايه|إيه|كام)|^(?:النهارده|النهاردة|الساعة|الساعه|التاريخ)$', text):
             now = dt.datetime.now(TZ)
             days = ['الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد']
@@ -190,7 +206,7 @@ def handle(msg):
             bot.send(chat, result)
             return
         if text in ('/features', '/commands'):
-            bot.send(chat, '/news أخبار عالمية اليوم عند الطلب\n/weather اسم المدينة\n/translate اللغة | النص\nابعت رابط مقال أو يوتيوب لتلخيص المتاح منه\n/remind YYYY-MM-DD HH:MM نص التذكير\n/occasion MM-DD HH:MM مناسبة سنوية\n/reminders لعرض التذكيرات\n/cancel رقم لحذف تذكير\n/prayer_alerts 10 اقتراح تنبيهات القاهرة\n/prayer_confirm للتفعيل بعد العرض\n/prayer_alerts off للإيقاف\n/football للماتشات المدعومة\n/memory_on و/memory_off\n/remember معلومة\n/forget لمسح الذاكرة')
+            bot.send(chat, '/news أخبار عالمية اليوم عند الطلب\n/weather اسم المدينة\n/translate اللغة | النص\nابعت رابط مقال أو يوتيوب لتلخيص المتاح منه\n/remind YYYY-MM-DD HH:MM نص التذكير\n/occasion MM-DD HH:MM مناسبة سنوية\n/reminders لعرض التذكيرات\n/cancel رقم لحذف تذكير\n/prayer_alerts 10 اقتراح تنبيهات الصلاة للقاهرة أو أي مدينة\n/prayer_confirm للتفعيل بعد العرض\n/prayer_alerts off للإيقاف\n/football للماتشات المدعومة\n/memory_on و/memory_off\n/remember معلومة\n/forget لمسح الذاكرة')
             return
     except ValueError as e:
         bot.send(chat, str(e) if str(e) else 'الصيغة مش واضحة. ابعت /commands')
@@ -212,13 +228,13 @@ if __name__ == '__main__':
 
 PRAYER_RETRY=0
 
-def prayer_alert_source_valid(data,date):
+def prayer_alert_place_valid(data,lat,lon,tzs,date,method):
     import math
     try:
         meta=data['meta']
-        if data['date']['gregorian']['date']!=date or meta['timezone']!='Africa/Cairo':return False
-        if meta['method']['id']!=5 or meta['school']!='STANDARD' or meta['latitudeAdjustmentMethod']!='ANGLE_BASED':return False
-        for key,expected in(('latitude',30.0444),('longitude',31.2357)):
+        if data['date']['gregorian']['date']!=date or meta['timezone']!=tzs:return False
+        if meta['method']['id']!=method or meta['school']!='STANDARD' or meta['latitudeAdjustmentMethod']!='ANGLE_BASED':return False
+        for key,expected in(('latitude',lat),('longitude',lon)):
             value=float(meta[key])
             if not math.isfinite(value)or abs(value-expected)>0.01:return False
         for key in('Fajr','Dhuhr','Asr','Maghrib','Isha'):
@@ -228,32 +244,42 @@ def prayer_alert_source_valid(data,date):
     except (KeyError,TypeError,ValueError,OverflowError):return False
 
 
+def prayer_alert_source_valid(data,date):
+    return prayer_alert_place_valid(data,30.0444,31.2357,'Africa/Cairo',date,5)
+
+
 def queue_prayer_alerts():
     global PRAYER_RETRY
     if time.monotonic()<PRAYER_RETRY:return
-    now=dt.datetime.now(TZ);day=now.strftime('%Y-%m-%d')
     with STORE.connect() as c:
-        rows=c.execute("SELECT chat_id,minutes FROM bot_prayer_alerts WHERE active=TRUE AND (generated_day IS NULL OR generated_day<>%s)",(day,)).fetchall()
+        rows=c.execute("SELECT chat_id,minutes,city,lat,lon,tz,method FROM bot_prayer_alerts WHERE active=TRUE AND (generated_day IS NULL OR generated_day<>to_char(NOW() AT TIME ZONE COALESCE(tz,'Africa/Cairo'),'YYYY-MM-DD')) LIMIT 200").fetchall()
     if not rows:return
+    groups={}
+    for chat,minutes,city,lat,lon,tzs,method in rows:
+        key=(city or 'القاهرة',float(lat)if lat is not None else 30.0444,float(lon)if lon is not None else 31.2357,tzs or 'Africa/Cairo',int(method)if method else 5)
+        groups.setdefault(key,[]).append((chat,minutes))
     try:
         import requests
-        url='https://api.aladhan.com/v1/timings/'+now.strftime('%d-%m-%Y')
-        r=requests.get(url,params={'latitude':30.0444,'longitude':31.2357,'method':5,'timezonestring':'Africa/Cairo','school':0,'latitudeAdjustmentMethod':3},timeout=12);r.raise_for_status();data=r.json()['data']
-        if not prayer_alert_source_valid(data,now.strftime('%d-%m-%Y')):raise ValueError('invalid prayer source metadata')
         names={'Fajr':'الفجر','Dhuhr':'الظهر','Asr':'العصر','Maghrib':'المغرب','Isha':'العشاء'}
-        schedule=[(label,dt.datetime.combine(now.date(),dt.time.fromisoformat(data['timings'][key][:5]),TZ)) for key,label in names.items()]
-        with STORE.connect() as c:
-            # Subscription may have been disabled while reading the source. Lock and recheck.
-            for chat,minutes in rows:
-                current=c.execute("SELECT minutes,generated_day FROM bot_prayer_alerts WHERE chat_id=%s AND active=TRUE FOR UPDATE",(chat,)).fetchone()
-                if not current or current[0]!=minutes or current[1]==day:continue
-                for label,prayer in schedule:
-                    due=prayer-dt.timedelta(minutes=minutes)
-                    if due<=dt.datetime.now(TZ):continue
-                    body='باقي '+str(minutes)+' دقيقة على '+label+' في القاهرة، الموعد الحسابي '+prayer.strftime('%H:%M')+'. المصدر AlAdhan، ممكن يختلف عن المسجد المحلي.'
-                    c.execute("INSERT INTO bot_reminders(chat_id,body,due,status,recurrence) VALUES (%s,%s,%s,'confirmed','prayer')",(chat,body,due))
-                c.execute("UPDATE bot_prayer_alerts SET generated_day=%s WHERE chat_id=%s",(day,chat))
-            c.execute("DELETE FROM bot_reminders WHERE recurrence='prayer' AND due<NOW()-INTERVAL '10 minutes'")
+        for (city,lat,lon,tzs,method),members in list(groups.items())[:25]:
+            z=ZoneInfo(tzs)
+            local=dt.datetime.now(z);day=local.strftime('%Y-%m-%d');date=local.strftime('%d-%m-%Y')
+            url='https://api.aladhan.com/v1/timings/'+date
+            r=requests.get(url,params={'latitude':lat,'longitude':lon,'method':method,'timezonestring':tzs,'school':0,'latitudeAdjustmentMethod':3},timeout=12);r.raise_for_status();data=r.json()['data']
+            if not prayer_alert_place_valid(data,lat,lon,tzs,date,method):raise ValueError('invalid prayer source metadata')
+            schedule=[(label,dt.datetime.combine(local.date(),dt.time.fromisoformat(data['timings'][key][:5]),z)) for key,label in names.items()]
+            with STORE.connect() as c:
+                # Subscription may have been disabled while reading the source. Lock and recheck.
+                for chat,minutes in members:
+                    current=c.execute("SELECT minutes,generated_day FROM bot_prayer_alerts WHERE chat_id=%s AND active=TRUE FOR UPDATE",(chat,)).fetchone()
+                    if not current or current[0]!=minutes or current[1]==day:continue
+                    for label,prayer in schedule:
+                        due=prayer-dt.timedelta(minutes=minutes)
+                        if due<=dt.datetime.now(z):continue
+                        body='باقي '+str(minutes)+' دقيقة على '+label+' في '+city+'، الموعد الحسابي '+prayer.strftime('%H:%M')+'. المصدر AlAdhan، ممكن يختلف عن المسجد المحلي.'
+                        c.execute("INSERT INTO bot_reminders(chat_id,body,due,status,recurrence) VALUES (%s,%s,%s,'confirmed','prayer')",(chat,body,due))
+                    c.execute("UPDATE bot_prayer_alerts SET generated_day=%s WHERE chat_id=%s",(day,chat))
+                c.execute("DELETE FROM bot_reminders WHERE recurrence='prayer' AND due<NOW()-INTERVAL '10 minutes'")
     except Exception:
         PRAYER_RETRY=time.monotonic()+900
         print('prayer_schedule_source_unavailable',flush=True)
