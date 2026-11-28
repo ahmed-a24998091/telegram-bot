@@ -122,3 +122,25 @@ def weather(city):
     return (f"طقس {place['name']}، {place.get('country','')}\nوقت بيانات المصدر: {c['time']} {data.get('timezone','')}\n"
             f"الحرارة {c['temperature_2m']}°م، الرطوبة {c['relative_humidity_2m']}٪، الرياح {c['wind_speed_10m']} كم/س.\n"
             'المصدر: https://open-meteo.com/\nدي بيانات طقس من المصدر، مش قياس مباشر من مكانك.')
+
+
+def geo_place(place):
+    # Same converter /clock geocoder the /weather and /prayer commands use, shared
+    # here so alert subscriptions can resolve a city without importing the entry module.
+    import os
+    url = os.environ.get('CONVERTER_URL', '').rstrip('/'); key = os.environ.get('CONVERTER_KEY', '')
+    if not place:
+        place = 'Cairo, Egypt'
+    aliases = {'طوكيو': 'Tokyo, Japan', 'tokyo': 'Tokyo, Japan', 'القاهرة': 'Cairo, Egypt', 'القاهره': 'Cairo, Egypt', 'cairo': 'Cairo, Egypt', 'الرياض': 'Riyadh, Saudi Arabia', 'جدة': 'Jeddah, Saudi Arabia', 'جده': 'Jeddah, Saudi Arabia'}
+    place = aliases.get(place.strip().casefold(), place)
+    r = requests.get(url + '/clock', params={'place': place, 'geo': '1'}, headers={'Authorization': 'Bearer ' + key}, timeout=95)
+    r.raise_for_status()
+    d = r.json()
+    if d.get('error'):
+        return None, d['error']
+    if d.get('choices'):
+        return None, 'الاسم موجود في أكتر من مكان. حدد المدينة والبلد:\n' + '\n'.join(x['name'] + '، ' + x['cc'] + ' | ' + x['kind'] for x in d['choices'])
+    if not all(k in d for k in ('lat', 'lon', 'tz')):
+        return None, 'خدمة الإحداثيات لسه مش جاهزة. مش هخمن المكان.'
+    note = d.get('note', '').replace('توقيت العاصمة المسجلة، مش بالضرورة كل مناطق البلد.', 'المكان هو العاصمة المسجلة، مش البلد كله.').replace('توقيت المركز المسجّل للإقليم؛ الإقليم الكبير ممكن يكون فيه مناطق بتوقيت مختلف.', 'المكان هو مركز الإقليم المسجّل، مش كل مناطقه.')
+    return d, note
