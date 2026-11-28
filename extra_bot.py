@@ -37,6 +37,7 @@ def init_reminders():
         c.execute("ALTER TABLE bot_prayer_alerts ADD COLUMN IF NOT EXISTS lon DOUBLE PRECISION")
         c.execute("ALTER TABLE bot_prayer_alerts ADD COLUMN IF NOT EXISTS tz TEXT")
         c.execute("ALTER TABLE bot_prayer_alerts ADD COLUMN IF NOT EXISTS method INTEGER")
+        c.execute("CREATE TABLE IF NOT EXISTS bot_weather_alerts(chat_id BIGINT PRIMARY KEY, clock TEXT NOT NULL, city TEXT, lat DOUBLE PRECISION, lon DOUBLE PRECISION, tz TEXT, active BOOLEAN NOT NULL DEFAULT FALSE, generated_day TEXT)")
 
 
 
@@ -124,6 +125,33 @@ def handle(msg):
             with STORE.connect() as c:
                 row=c.execute("UPDATE bot_prayer_alerts SET active=TRUE WHERE chat_id=%s AND active=FALSE RETURNING minutes,COALESCE(city,'القاهرة')",(chat,)).fetchone()
             bot.send(chat,'اتفعّلت تنبيهات '+row[1]+' قبل كل صلاة بـ'+str(row[0])+' دقيقة. ممكن تتأخر على الاستضافة المجانية. للإيقاف /prayer_alerts off' if row else 'مفيش إعداد منتظر تأكيد. ابعت /prayer_alerts 10 الأول.');return
+        if text.startswith('/weather_alert'):
+            rest=text[len('/weather_alert'):].strip()
+            if rest=='off':
+                with STORE.connect() as c:
+                    c.execute("DELETE FROM bot_weather_alerts WHERE chat_id=%s",(chat,))
+                    c.execute("DELETE FROM bot_reminders WHERE chat_id=%s AND recurrence='weather'",(chat,))
+                bot.send(chat,'وقفت نشرة الطقس اليومية ومسحت المنتظر منها.');return
+            match=re.fullmatch(r'([01][0-9]|2[0-3]):([0-5][0-9])(?:\s+(.+))?',rest)
+            if match:
+                clock=match.group(0)[:5];label='القاهرة';geo=None
+                if match.group(3):
+                    try:geo,gnote=geo_place(match.group(3).strip()[:80])
+                    except Exception:bot.send(chat,'خدمة الإحداثيات مش متاحة دلوقتي. جرّب بعد شوية أو احذف اسم المدينة للقاهرة.');return
+                    if geo is None:bot.send(chat,gnote);return
+                    label=geo['name']+'، '+geo['cc']
+                with STORE.connect() as c:
+                    if geo is None:
+                        c.execute("INSERT INTO bot_weather_alerts(chat_id,clock,active,city,lat,lon,tz) VALUES (%s,%s,FALSE,NULL,NULL,NULL,NULL) ON CONFLICT(chat_id) DO UPDATE SET clock=EXCLUDED.clock,active=FALSE,generated_day=NULL,city=NULL,lat=NULL,lon=NULL,tz=NULL",(chat,clock))
+                    else:
+                        c.execute("INSERT INTO bot_weather_alerts(chat_id,clock,active,city,lat,lon,tz) VALUES (%s,%s,FALSE,%s,%s,%s,%s) ON CONFLICT(chat_id) DO UPDATE SET clock=EXCLUDED.clock,active=FALSE,generated_day=NULL,city=EXCLUDED.city,lat=EXCLUDED.lat,lon=EXCLUDED.lon,tz=EXCLUDED.tz",(chat,clock,label,geo['lat'],geo['lon'],geo['tz']))
+                    c.execute("DELETE FROM bot_reminders WHERE chat_id=%s AND recurrence='weather'",(chat,))
+                bot.send(chat,f'اقتراح: نشرة طقس يومية لـ {label} الساعة {clock} بتوقيت المدينة. المصدر open-meteo، تقدير شبكة الطقس مش قياس مباشر، والاستضافة المجانية ممكن تتأخر أو تفوّت نشرة. للتفعيل ابعت /weather_confirm وللإلغاء /weather_alert off');return
+            bot.send(chat,'نشرة الطقس اليومية اختيارية وغير مفعلة تلقائياً. للقاهرة /weather_alert 07:30 أو لأي مدينة مثلاً /weather_alert 07:30 Dubai, UAE لعرض النشرة وتأكيدها. /weather_alert off للإيقاف.');return
+        if text=='/weather_confirm':
+            with STORE.connect() as c:
+                row=c.execute("UPDATE bot_weather_alerts SET active=TRUE WHERE chat_id=%s AND active=FALSE RETURNING clock,COALESCE(city,'القاهرة')",(chat,)).fetchone()
+            bot.send(chat,'اتفعّلت نشرة '+row[1]+' اليومية الساعة '+row[0]+'. ممكن تتأخر على الاستضافة المجانية. للإيقاف /weather_alert off' if row else 'مفيش إعداد منتظر تأكيد. ابعت /weather_alert 07:30 الأول.');return
         if text == '/time'  or re.search(r'(?:النهارده|النهاردة|انهارده|اليوم|الساعة|الساعه|تاريخ).*(?:ايه|إيه|كام)|^(?:النهارده|النهاردة|الساعة|الساعه|التاريخ)$', text):
             now = dt.datetime.now(TZ)
             days = ['الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد']
@@ -206,7 +234,7 @@ def handle(msg):
             bot.send(chat, result)
             return
         if text in ('/features', '/commands'):
-            bot.send(chat, '/news أخبار عالمية اليوم عند الطلب\n/weather اسم المدينة\n/translate اللغة | النص\nابعت رابط مقال أو يوتيوب لتلخيص المتاح منه\n/remind YYYY-MM-DD HH:MM نص التذكير\n/occasion MM-DD HH:MM مناسبة سنوية\n/reminders لعرض التذكيرات\n/cancel رقم لحذف تذكير\n/prayer_alerts 10 اقتراح تنبيهات الصلاة للقاهرة أو أي مدينة\n/prayer_confirm للتفعيل بعد العرض\n/prayer_alerts off للإيقاف\n/football للماتشات المدعومة\n/memory_on و/memory_off\n/remember معلومة\n/forget لمسح الذاكرة')
+            bot.send(chat, '/news أخبار عالمية اليوم عند الطلب\n/weather اسم المدينة\n/weather_alert 07:30 نشرة طقس يومية للقاهرة أو أي مدينة\n/weather_confirm للتفعيل بعد العرض\n/weather_alert off للإيقاف\n/translate اللغة | النص\nابعت رابط مقال أو يوتيوب لتلخيص المتاح منه\n/remind YYYY-MM-DD HH:MM نص التذكير\n/occasion MM-DD HH:MM مناسبة سنوية\n/reminders لعرض التذكيرات\n/cancel رقم لحذف تذكير\n/prayer_alerts 10 اقتراح تنبيهات الصلاة للقاهرة أو أي مدينة\n/prayer_confirm للتفعيل بعد العرض\n/prayer_alerts off للإيقاف\n/football للماتشات المدعومة\n/memory_on و/memory_off\n/remember معلومة\n/forget لمسح الذاكرة')
             return
     except ValueError as e:
         bot.send(chat, str(e) if str(e) else 'الصيغة مش واضحة. ابعت /commands')
@@ -227,6 +255,63 @@ if __name__ == '__main__':
 
 
 PRAYER_RETRY=0
+
+def weather_alert_valid(data,lat,lon,tzs,target_day):
+    import math
+    try:
+        if data['timezone']!=tzs:return False
+        latitude=float(data['latitude']);longitude=float(data['longitude'])
+        if not(math.isfinite(latitude)and math.isfinite(longitude)):return False
+        if abs(latitude-lat)>0.5 or abs((longitude-lon+180)%360-180)>0.5:return False
+        units=data['daily_units']
+        if units.get('temperature_2m_max')!='°C' or units.get('temperature_2m_min')!='°C' or units.get('precipitation_probability_max')!='%':return False
+        daily=data['daily']
+        if daily['time'][0]!=target_day:return False
+        for key in('temperature_2m_max','temperature_2m_min'):
+            value=daily[key][0]
+            if isinstance(value,bool)or not isinstance(value,(int,float))or not math.isfinite(value)or not -100<=value<=70:return False
+        rain=daily['precipitation_probability_max'][0]
+        if rain is not None and (isinstance(rain,bool)or not isinstance(rain,(int,float))or not 0<=rain<=100):return False
+        return True
+    except (KeyError,TypeError,ValueError,OverflowError,IndexError):return False
+
+
+def queue_weather_alerts():
+    global WEATHER_RETRY
+    if time.monotonic()<WEATHER_RETRY:return
+    with STORE.connect() as c:
+        rows=c.execute("SELECT chat_id,clock,city,lat,lon,tz,generated_day FROM bot_weather_alerts WHERE active=TRUE LIMIT 200").fetchall()
+    if not rows:return
+    try:
+        import requests
+        for chat,clock,city,lat,lon,tzs,generated in rows[:50]:
+            if not isinstance(clock,str)or not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]',clock):continue
+            z=ZoneInfo(tzs or 'Africa/Cairo')
+            now=dt.datetime.now(z)
+            due=dt.datetime.combine(now.date(),dt.time.fromisoformat(clock),z)
+            target=now.date() if due>now else now.date()+dt.timedelta(days=1)
+            target_day=target.strftime('%Y-%m-%d')
+            if generated==target_day:continue
+            lat=float(lat)if lat is not None else 30.0444
+            lon=float(lon)if lon is not None else 31.2357
+            label=city or 'القاهرة'
+            due=dt.datetime.combine(target,dt.time.fromisoformat(clock),z)
+            r=requests.get('https://api.open-meteo.com/v1/forecast',params={'latitude':lat,'longitude':lon,'daily':'temperature_2m_max,temperature_2m_min,precipitation_probability_max','timezone':tzs or 'Africa/Cairo','forecast_days':1,'start_date':target_day,'end_date':target_day},timeout=12);r.raise_for_status();data=r.json()
+            if not weather_alert_valid(data,lat,lon,tzs or 'Africa/Cairo',target_day):raise ValueError('invalid weather source metadata')
+            daily=data['daily'];rain=daily['precipitation_probability_max'][0]
+            body='نشرة طقس '+label+' ليوم '+target_day+': العظمى '+str(daily['temperature_2m_max'][0])+'°م، الصغرى '+str(daily['temperature_2m_min'][0])+'°م، احتمال المطر '+('غير متاح'if rain is None else str(rain)+'٪')+'. المصدر open-meteo، تقدير شبكة الطقس مش قياس مباشر، وممكن يتأخر على الاستضافة المجانية.'
+            with STORE.connect() as c:
+                current=c.execute("SELECT generated_day FROM bot_weather_alerts WHERE chat_id=%s AND active=TRUE FOR UPDATE",(chat,)).fetchone()
+                if not current or current[0]==target_day:continue
+                c.execute("INSERT INTO bot_reminders(chat_id,body,due,status,recurrence) VALUES (%s,%s,%s,'confirmed','weather')",(chat,body,due))
+                c.execute("UPDATE bot_weather_alerts SET generated_day=%s WHERE chat_id=%s",(target_day,chat))
+    except Exception:
+        WEATHER_RETRY=time.monotonic()+900
+        print('weather_schedule_source_unavailable',flush=True)
+
+
+WEATHER_RETRY=0
+
 
 def prayer_alert_place_valid(data,lat,lon,tzs,date,method):
     import math
