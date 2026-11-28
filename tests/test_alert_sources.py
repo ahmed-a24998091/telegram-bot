@@ -17,10 +17,11 @@ ROOT = Path(__file__).resolve().parents[1]
 class AlertSourceTests(unittest.TestCase):
     def setUp(self):
         self.queries, self.inserted, self.sent, self.network = [], [], [], []
-        self.prayer_rows, self.price_rows = [], []
+        self.prayer_rows, self.price_rows, self.weather_rows = [], [], []
         self.cancel, self.delivered = False, True
         self.generated = None
         self.generated_map = {}
+        self.weather_generated = {}
         self.recheck_minutes = 10
         owner = self
         class Connection:
@@ -34,18 +35,25 @@ class AlertSourceTests(unittest.TestCase):
                 if query.startswith('UPDATE bot_prayer_alerts SET generated_day'):
                     owner.generated = params[0]
                     owner.generated_map[params[1]] = params[0]
+                if query.startswith('UPDATE bot_weather_alerts SET generated_day'):
+                    owner.weather_generated[params[1]] = params[0]
                 return self
             def fetchall(self):
-                return owner.prayer_rows if self.query.startswith('SELECT chat_id') else owner.price_rows
+                if 'bot_weather_alerts' in self.query: return owner.weather_rows
+                if 'bot_prayer_alerts' in self.query: return owner.prayer_rows
+                return owner.price_rows
             def fetchone(self):
                 if owner.cancel: return None
                 if self.query.startswith('SELECT minutes'):
                     return (owner.recheck_minutes, owner.generated_map.get(self.params[0]))
+                if self.query.startswith('SELECT generated_day'):
+                    return (owner.weather_generated.get(self.params[0]),)
                 return (1,)
         self.scope = {'dt': dt, 'time': time, 're': re, 'TZ': ZoneInfo('Africa/Cairo'), 'ZoneInfo': ZoneInfo,
             'STORE': types.SimpleNamespace(connect=Connection), 'PRAYER_RETRY': 0,
+            'WEATHER_RETRY': 0,
             'PRICE_NEXT_CHECK': 0, 'bot': types.SimpleNamespace(tg=self.send)}
-        names = {'prayer_alert_source_valid', 'prayer_alert_place_valid', 'queue_prayer_alerts', 'check_price_alerts'}
+        names = {'prayer_alert_source_valid', 'prayer_alert_place_valid', 'queue_prayer_alerts', 'check_price_alerts', 'queue_weather_alerts', 'weather_alert_valid'}
         nodes = [n for n in ast.parse((ROOT / 'extra_bot.py').read_text()).body
                  if isinstance(n, ast.FunctionDef) and n.name in names]
         exec(compile(ast.Module(body=nodes, type_ignores=[]), 'extra_bot.py', 'exec'), self.scope)
@@ -149,6 +157,64 @@ class AlertSourceTests(unittest.TestCase):
         self.assertEqual(len(self.network), 2)
         chats = {row[0] for row in self.inserted}
         self.assertEqual(chats, {123, 124, 125})
+
+    def weather_payload(self, tzs, target_day, lat, lon):
+        return {'timezone': tzs, 'latitude': lat, 'longitude': lon,
+            'daily_units': {'temperature_2m_max': '°C', 'temperature_2m_min': '°C', 'precipitation_probability_max': '%'},
+            'daily': {'time': [target_day], 'temperature_2m_max': [28.5], 'temperature_2m_min': [17.0], 'precipitation_probability_max': [10]}}
+
+    def expected_target(self, tzs, clock):
+        now = dt.datetime.now(ZoneInfo(tzs))
+        due = dt.datetime.combine(now.date(), dt.time.fromisoformat(clock), ZoneInfo(tzs))
+        return (now.date() if due > now else now.date() + dt.timedelta(days=1)).strftime('%Y-%m-%d')
+
+    def test_weather_alert_queues_daily_briefing(self):
+        self.weather_rows = [(123, '23:59', None, None, None, None, None)]
+        target = self.expected_target('Africa/Cairo', '23:59')
+        self.payload = self.weather_payload('Africa/Cairo', target, 30.0, 31.3)
+        self.scope['queue_weather_alerts']()
+        self.assertEqual(len(self.inserted), 1)
+        chat, body, due = self.inserted[0][0], self.inserted[0][1], self.inserted[0][2]
+        self.assertEqual(chat, 123)
+        self.assertIn('نشرة طقس القاهرة', body)
+        self.assertIn(target, body)
+        self.assertEqual(due.utcoffset(), dt.datetime.now(ZoneInfo('Africa/Cairo')).utcoffset())
+        self.assertEqual(self.weather_generated.get(123), target)
+        self.scope['queue_weather_alerts']()
+        self.assertEqual(len(self.inserted), 1)
+
+    def test_weather_alert_global_city(self):
+        self.weather_rows = [(124, '23:59', 'دبي، AE', 25.2048, 55.2708, 'Asia/Dubai', None)]
+        target = self.expected_target('Asia/Dubai', '23:59')
+        self.payload = self.weather_payload('Asia/Dubai', target, 25.2, 55.3)
+        self.scope['queue_weather_alerts']()
+        params = self.network[0][1]['params']
+        self.assertEqual(params['timezone'], 'Asia/Dubai')
+        self.assertAlmostEqual(params['latitude'], 25.2048)
+        self.assertIn('دبي', self.inserted[0][1])
+
+    def test_weather_clock_passed_schedules_tomorrow(self):
+        self.weather_rows = [(123, '00:00', None, None, None, None, None)]
+        target = self.expected_target('Africa/Cairo', '00:00')
+        self.assertEqual(target, (dt.datetime.now(ZoneInfo('Africa/Cairo')).date() + dt.timedelta(days=1)).strftime('%Y-%m-%d'))
+        self.payload = self.weather_payload('Africa/Cairo', target, 30.0, 31.3)
+        self.scope['queue_weather_alerts']()
+        self.assertEqual(self.inserted[0][2].strftime('%Y-%m-%d'), target)
+
+    def test_bad_weather_metadata_creates_no_rows(self):
+        self.weather_rows = [(123, '23:59', None, None, None, None, None)]
+        target = self.expected_target('Africa/Cairo', '23:59')
+        for mutate in ('timezone', 'units', 'date', 'coords'):
+            self.inserted.clear(); self.weather_generated.clear()
+            self.payload = self.weather_payload('Africa/Cairo', target, 30.0, 31.3)
+            if mutate == 'timezone': self.payload['timezone'] = 'Asia/Tokyo'
+            elif mutate == 'units': self.payload['daily_units']['temperature_2m_max'] = '°F'
+            elif mutate == 'date': self.payload['daily']['time'] = ['2001-01-01']
+            else: self.payload['latitude'] = 10.0
+            self.scope['WEATHER_RETRY'] = 0
+            self.scope['queue_weather_alerts']()
+            self.assertEqual(self.inserted, [], mutate)
+            self.assertEqual(self.weather_generated, {}, mutate)
 
     def test_bad_global_metadata_creates_no_rows(self):
         self.prayer_rows = [(124, 10, 'دبي، AE', 25.2048, 55.2708, 'Asia/Dubai', 3)]
