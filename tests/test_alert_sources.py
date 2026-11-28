@@ -20,25 +20,32 @@ class AlertSourceTests(unittest.TestCase):
         self.prayer_rows, self.price_rows = [], []
         self.cancel, self.delivered = False, True
         self.generated = None
+        self.generated_map = {}
+        self.recheck_minutes = 10
         owner = self
         class Connection:
             def __enter__(self): return self
             def __exit__(self, *args): pass
             def execute(self, query, params=()):
                 self.query = query
+                self.params = params
                 owner.queries.append(query)
                 if query.startswith('INSERT INTO bot_reminders'): owner.inserted.append(params)
-                if query.startswith('UPDATE bot_prayer_alerts SET generated_day'): owner.generated = params[0]
+                if query.startswith('UPDATE bot_prayer_alerts SET generated_day'):
+                    owner.generated = params[0]
+                    owner.generated_map[params[1]] = params[0]
                 return self
             def fetchall(self):
                 return owner.prayer_rows if self.query.startswith('SELECT chat_id') else owner.price_rows
             def fetchone(self):
                 if owner.cancel: return None
-                return (10, owner.generated) if self.query.startswith('SELECT minutes') else (1,)
-        self.scope = {'dt': dt, 'time': time, 're': re, 'TZ': ZoneInfo('Africa/Cairo'),
+                if self.query.startswith('SELECT minutes'):
+                    return (owner.recheck_minutes, owner.generated_map.get(self.params[0]))
+                return (1,)
+        self.scope = {'dt': dt, 'time': time, 're': re, 'TZ': ZoneInfo('Africa/Cairo'), 'ZoneInfo': ZoneInfo,
             'STORE': types.SimpleNamespace(connect=Connection), 'PRAYER_RETRY': 0,
             'PRICE_NEXT_CHECK': 0, 'bot': types.SimpleNamespace(tg=self.send)}
-        names = {'prayer_alert_source_valid', 'queue_prayer_alerts', 'check_price_alerts'}
+        names = {'prayer_alert_source_valid', 'prayer_alert_place_valid', 'queue_prayer_alerts', 'check_price_alerts'}
         nodes = [n for n in ast.parse((ROOT / 'extra_bot.py').read_text()).body
                  if isinstance(n, ast.FunctionDef) and n.name in names]
         exec(compile(ast.Module(body=nodes, type_ignores=[]), 'extra_bot.py', 'exec'), self.scope)
@@ -83,7 +90,7 @@ class AlertSourceTests(unittest.TestCase):
         self.assertEqual(self.sent, [])
 
     def test_bad_prayer_metadata_creates_no_rows(self):
-        self.prayer_rows = [(123, 10)]
+        self.prayer_rows = [(123, 10, None, None, None, None, None)]
         for key, value in [('timezone', 'Asia/Tokyo'), ('longitude', 130), ('method', {'id': 4})]:
             self.payload = self.prayer()
             self.payload['data']['meta'][key] = value
@@ -93,7 +100,7 @@ class AlertSourceTests(unittest.TestCase):
             self.assertIsNone(self.generated)
 
     def test_prayer_optin_recheck_and_daily_duplicate_guard(self):
-        self.prayer_rows = [(123, 10)]
+        self.prayer_rows = [(123, 10, None, None, None, None, None)]
         self.payload = self.prayer()
         self.cancel = True
         self.scope['queue_prayer_alerts']()
@@ -105,6 +112,51 @@ class AlertSourceTests(unittest.TestCase):
         self.scope['queue_prayer_alerts']()
         self.assertEqual(len(self.inserted), count)
         self.assertTrue(all(row[0] == 123 for row in self.inserted))
+
+    def dubai_prayer(self):
+        now = dt.datetime.now(ZoneInfo('Asia/Dubai'))
+        return {'data': {'date': {'gregorian': {'date': now.strftime('%d-%m-%Y')}},
+            'meta': {'latitude': 25.2048, 'longitude': 55.2708, 'timezone': 'Asia/Dubai',
+                'method': {'id': 3}, 'school': 'STANDARD', 'latitudeAdjustmentMethod': 'ANGLE_BASED'},
+            'timings': dict(Fajr='23:50', Dhuhr='23:51', Asr='23:52', Maghrib='23:53', Isha='23:54')}}
+
+    def test_global_subscriber_uses_own_city_tz_method(self):
+        self.prayer_rows = [(124, 10, 'دبي، AE', 25.2048, 55.2708, 'Asia/Dubai', 3)]
+        self.payload = self.dubai_prayer()
+        self.scope['queue_prayer_alerts']()
+        self.assertEqual(len(self.network), 1)
+        params = self.network[0][1]['params']
+        self.assertEqual(params['timezonestring'], 'Asia/Dubai')
+        self.assertEqual(params['method'], 3)
+        self.assertAlmostEqual(params['latitude'], 25.2048)
+        self.assertTrue(self.inserted)
+        self.assertTrue(all('دبي' in row[1] for row in self.inserted))
+        for row in self.inserted:
+            self.assertEqual(row[2].utcoffset(), dt.datetime.now(ZoneInfo('Asia/Dubai')).utcoffset())
+
+    def test_grouped_fetch_per_distinct_city(self):
+        self.prayer_rows = [(123, 10, None, None, None, None, None),
+                            (124, 10, 'دبي، AE', 25.2048, 55.2708, 'Asia/Dubai', 3),
+                            (125, 10, 'دبي، AE', 25.2048, 55.2708, 'Asia/Dubai', 3)]
+        cairo = self.prayer(); dubai = self.dubai_prayer()
+        owner = self
+        def routed_get(url, params=None, **kw):
+            owner.network.append(((url,), {'params': params}))
+            payload = dubai if params['timezonestring'] == 'Asia/Dubai' else cairo
+            return types.SimpleNamespace(raise_for_status=lambda: None, json=lambda: payload)
+        self.requests.get = routed_get
+        self.scope['queue_prayer_alerts']()
+        self.assertEqual(len(self.network), 2)
+        chats = {row[0] for row in self.inserted}
+        self.assertEqual(chats, {123, 124, 125})
+
+    def test_bad_global_metadata_creates_no_rows(self):
+        self.prayer_rows = [(124, 10, 'دبي، AE', 25.2048, 55.2708, 'Asia/Dubai', 3)]
+        self.payload = self.dubai_prayer()
+        self.payload['data']['meta']['timezone'] = 'Africa/Cairo'
+        self.scope['queue_prayer_alerts']()
+        self.assertEqual(self.inserted, [])
+        self.assertIsNone(self.generated)
 
     def test_bad_price_metadata_cannot_send(self):
         self.price_rows = [(1, 123, 'usd', 'above', 55)]
@@ -137,3 +189,50 @@ class AlertSourceTests(unittest.TestCase):
         count = len(self.sent)
         self.scope['check_price_alerts']()
         self.assertEqual(len(self.sent), count)
+
+
+class GeoPlaceTests(unittest.TestCase):
+    def build(self, payload):
+        calls = []
+        requests = types.ModuleType('requests')
+        def get(url, params=None, headers=None, timeout=None):
+            calls.append((url, params))
+            return types.SimpleNamespace(raise_for_status=lambda: None, json=lambda: payload)
+        requests.get = get
+        node = next(n for n in ast.parse((ROOT / 'live_sources.py').read_text()).body
+                    if isinstance(n, ast.FunctionDef) and n.name == 'geo_place')
+        scope = {'requests': requests}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), 'live_sources.py', 'exec'), scope)
+        return scope['geo_place'], calls
+
+    def test_resolved_place(self):
+        geo_place, calls = self.build({'lat': 25.2, 'lon': 55.27, 'tz': 'Asia/Dubai', 'name': 'دبي', 'cc': 'AE'})
+        place, note = geo_place('Dubai, UAE')
+        self.assertEqual(place['tz'], 'Asia/Dubai')
+        self.assertEqual(calls[0][1]['place'], 'Dubai, UAE')
+        self.assertEqual(calls[0][1]['geo'], '1')
+
+    def test_alias_maps_to_english(self):
+        geo_place, calls = self.build({'lat': 30.0, 'lon': 31.2, 'tz': 'Africa/Cairo', 'name': 'القاهرة', 'cc': 'EG'})
+        geo_place('القاهرة')
+        self.assertEqual(calls[0][1]['place'], 'Cairo, Egypt')
+
+    def test_error_and_choices_refused(self):
+        geo_place, _ = self.build({'error': 'مقدرتش أحدد المكان.'})
+        place, note = geo_place('Nowhere')
+        self.assertIsNone(place)
+        self.assertEqual(note, 'مقدرتش أحدد المكان.')
+        geo_place, _ = self.build({'choices': [{'name': 'أبوقير', 'cc': 'EG', 'kind': 'مدينة'}]})
+        place, note = geo_place('Abu Qir')
+        self.assertIsNone(place)
+        self.assertIn('أكتر من مكان', note)
+
+    def test_incomplete_payload_not_guessed(self):
+        geo_place, _ = self.build({'lat': 30.0})
+        place, note = geo_place('Cairo')
+        self.assertIsNone(place)
+        self.assertIn('مش هخمن المكان', note)
+
+
+if __name__ == '__main__':
+    unittest.main()
