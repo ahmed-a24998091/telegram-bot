@@ -1709,9 +1709,9 @@ def functional_reminders_loop():
  extra=conversion_bot.finish_bot.EXTRA
  while True:
   try:
-   extra.check_price_alerts();extra.queue_prayer_alerts()
+   extra.check_price_alerts();extra.queue_prayer_alerts();extra.queue_weather_alerts()
    with extra.STORE.connect()as c:
-    c.execute("DELETE FROM bot_reminders WHERE recurrence='prayer' AND due<NOW()-INTERVAL '2 minutes'")
+    c.execute("DELETE FROM bot_reminders WHERE recurrence IN ('prayer','weather') AND due<NOW()-INTERVAL '2 minutes'")
     rows=c.execute("SELECT id,chat_id,body,due,recurrence FROM bot_reminders WHERE status='confirmed' AND due<=NOW() ORDER BY due LIMIT 20 FOR UPDATE SKIP LOCKED").fetchall()
     for rid,chat,body,due,recurrence in rows:
      result=bot.tg('sendMessage',data={'chat_id':chat,'text':'تذكيرك: '+body})
